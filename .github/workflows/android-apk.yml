@@ -38,6 +38,8 @@ jobs:
           chmod 600 ~/.android/debug.keystore
           echo "debug.keystore restored:"
           ls -la ~/.android/debug.keystore
+          echo "Keystore size (bytes):"
+          (stat -c%s ~/.android/debug.keystore 2>/dev/null || wc -c < ~/.android/debug.keystore) || true
 
       # ✅ Restore Firebase google-services.json
       - name: Restore google-services.json
@@ -49,15 +51,27 @@ jobs:
           echo "google-services.json restored:"
           ls -la android/app/google-services.json
 
-      # ✅ Print SHA-1 from the SAME keystore (add this SHA-1 to Firebase)
+      # ✅ Print SHA-1 from the SAME keystore (won't fail the workflow)
       - name: Print SHA-1 (stable debug keystore)
         run: |
-          echo "=== DEBUG KEYSTORE SHA-1 ==="
+          set +e
+          echo "=== CHECK ~/.android ==="
+          ls -la ~/.android || true
+          echo "=== LIST KEYSTORE (alias + SHA-1) ==="
+          keytool -list -v \
+            -keystore ~/.android/debug.keystore \
+            -storepass android \
+            | grep -E "Alias name:|SHA1:|SHA-1:" || true
+
+          echo "=== TRY SPECIFIC ALIAS (androiddebugkey) ==="
           keytool -list -v \
             -keystore ~/.android/debug.keystore \
             -alias androiddebugkey \
             -storepass android \
-            | grep -E "SHA1:|SHA-1:"
+            | grep -E "Alias name:|SHA1:|SHA-1:" || true
+
+          echo "NOTE: If SHA-1 is not printed above, your ANDROID_DEBUG_KEYSTORE_B64 secret is wrong/empty"
+          echo "or the keystore uses a different alias/password."
 
       - name: Build release APK
         run: flutter build apk --release
