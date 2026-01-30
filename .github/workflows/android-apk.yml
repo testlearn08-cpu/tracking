@@ -49,12 +49,21 @@ jobs:
       # ✅ Restore Firebase google-services.json
       - name: Restore google-services.json
         env:
-          GSJ_B64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+          P1: ${{ secrets.GSJ_B64_P1 }}
+          P2: ${{ secrets.GSJ_B64_P2 }}
         run: |
           mkdir -p android/app
-          printf '%s' "$GSJ_B64" | base64 -d > android/app/google-services.json
+          printf '%s%s' "$P1" "$P2" | base64 -d > android/app/google-services.json
           echo "google-services.json restored:"
           ls -la android/app/google-services.json
+          echo "Validate JSON:"
+          python3 - <<'PY'
+          import json
+          with open("android/app/google-services.json","r",encoding="utf-8") as f:
+              json.load(f)
+          print("google-services.json is valid JSON ✅")
+          PY
+
 
       # ✅ Print SHA-1 from restored keystore
       - name: Print SHA-1 (stable keystore)
