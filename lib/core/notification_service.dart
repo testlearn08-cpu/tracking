@@ -19,7 +19,12 @@ class NotificationService {
 
   Future<void> init() async {
     tzdata.initializeTimeZones();
-    final String tzName = await FlutterTimezone.getLocalTimezone();
+
+    // flutter_timezone 5.x returns TimezoneInfo with an IANA "identifier"
+    // e.g. "Asia/Kolkata"
+    final tzInfo = await FlutterTimezone.getLocalTimezone();
+    final String tzName = tzInfo.identifier;
+
     tz.setLocalLocation(tz.getLocation(tzName));
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
@@ -27,7 +32,7 @@ class NotificationService {
 
     await _plugin.initialize(initSettings);
 
-    // Android 13+ permission
+    // Android 13+ permission (safe: no-op on older)
     await _plugin
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
