@@ -28,13 +28,16 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
-      # ✅ Restore stable debug keystore (safer decode + verification)
+      # ✅ Restore stable debug keystore from split secrets (prevents truncation)
       - name: Restore debug.keystore (stable)
         env:
-          KS_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+          P1: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P1 }}
+          P2: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P2 }}
+          P3: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P3 }}
+          P4: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P4 }}
         run: |
           mkdir -p ~/.android
-          printf '%s' "$KS_B64" | base64 -d > ~/.android/debug.keystore
+          printf '%s%s%s%s' "$P1" "$P2" "$P3" "$P4" | base64 -d > ~/.android/debug.keystore
           chmod 600 ~/.android/debug.keystore
           echo "debug.keystore restored:"
           ls -la ~/.android/debug.keystore
@@ -53,46 +56,18 @@ jobs:
           echo "google-services.json restored:"
           ls -la android/app/google-services.json
 
-      # ✅ Print SHA-1 from keystore (shows real errors + tries store types)
-      - name: Print SHA-1 (stable debug keystore)
+      # ✅ Print SHA-1 from restored keystore
+      - name: Print SHA-1 (stable keystore)
         run: |
           set +e
-          echo "=== KEYTOOL VERSION ==="
-          keytool -help | head -n 2 || true
-
-          echo "=== LIST KEYSTORE (no alias) ==="
+          echo "=== LIST KEYSTORE (alias + SHA-1) ==="
           keytool -list -v \
             -keystore ~/.android/debug.keystore \
             -storepass android \
             2>&1 | tee /tmp/keytool_all.txt
 
-          echo "=== TRY ALIAS androiddebugkey ==="
-          keytool -list -v \
-            -keystore ~/.android/debug.keystore \
-            -storepass android \
-            -alias androiddebugkey \
-            2>&1 | tee /tmp/keytool_alias.txt
-
-          echo "=== TRY storetype JKS ==="
-          keytool -list -v \
-            -keystore ~/.android/debug.keystore \
-            -storepass android \
-            -storetype JKS \
-            2>&1 | tee /tmp/keytool_jks.txt
-
-          echo "=== TRY storetype PKCS12 ==="
-          keytool -list -v \
-            -keystore ~/.android/debug.keystore \
-            -storepass android \
-            -storetype PKCS12 \
-            2>&1 | tee /tmp/keytool_p12.txt
-
-          echo "=== GREP SHA-1 lines (if any) ==="
-          cat /tmp/keytool_all.txt /tmp/keytool_alias.txt /tmp/keytool_jks.txt /tmp/keytool_p12.txt \
-            | grep -E "Alias name:|SHA1:|SHA-1:" || true
-
-          echo "NOTE: If you see 'Keystore was tampered with, or password was incorrect' => password mismatch."
-          echo "NOTE: If you see 'Unrecognized keystore format' => bad base64/decoded file."
+          echo "=== GREP SHA-1 lines ==="
+          cat /tmp/keytool_all.txt | grep -E "Alias name:|SHA1:|SHA-1:" || true
 
       - name: Build release APK
         run: flutter build apk --release
