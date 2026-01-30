@@ -28,6 +28,18 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      # ✅ Restore stable debug keystore (so SHA-1 stays SAME across builds)
+      - name: Restore debug.keystore (stable)
+        env:
+          KS_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64 }}
+        run: |
+          mkdir -p ~/.android
+          echo "$KS_B64" | base64 -d > ~/.android/debug.keystore
+          chmod 600 ~/.android/debug.keystore
+          echo "debug.keystore restored:"
+          ls -la ~/.android/debug.keystore
+
+      # ✅ Restore Firebase google-services.json
       - name: Restore google-services.json
         env:
           GSJ_B64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
@@ -37,31 +49,15 @@ jobs:
           echo "google-services.json restored:"
           ls -la android/app/google-services.json
 
-      # ✅ Ensure debug.keystore exists, then print SHA-1
-      - name: Create debug keystore + Print SHA-1
+      # ✅ Print SHA-1 from the SAME keystore (add this SHA-1 to Firebase)
+      - name: Print SHA-1 (stable debug keystore)
         run: |
-          mkdir -p ~/.android
-
-          if [ ! -f ~/.android/debug.keystore ]; then
-            echo "debug.keystore not found. Creating it..."
-            keytool -genkeypair -v \
-              -keystore ~/.android/debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-
           echo "=== DEBUG KEYSTORE SHA-1 ==="
           keytool -list -v \
             -keystore ~/.android/debug.keystore \
             -alias androiddebugkey \
             -storepass android \
             | grep -E "SHA1:|SHA-1:"
-
 
       - name: Build release APK
         run: flutter build apk --release
