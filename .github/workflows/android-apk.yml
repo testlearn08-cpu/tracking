@@ -37,13 +37,31 @@ jobs:
           echo "google-services.json restored:"
           ls -la android/app/google-services.json
 
-      # ✅ Prints debug keystore SHA-1 (used by your current release signingConfig=debug)
-      - name: Print SHA-1 (debug keystore)
+      # ✅ Ensure debug.keystore exists, then print SHA-1
+      - name: Create debug keystore + Print SHA-1
         run: |
+          mkdir -p ~/.android
+
+          if [ ! -f ~/.android/debug.keystore ]; then
+            echo "debug.keystore not found. Creating it..."
+            keytool -genkeypair -v \
+              -keystore ~/.android/debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
           echo "=== DEBUG KEYSTORE SHA-1 ==="
-          keytool -list -v -keystore ~/.android/debug.keystore \
-            -alias androiddebugkey -storepass android -keypass android \
-            | grep -E "SHA1:|SHA-1:" || true
+          keytool -list -v \
+            -keystore ~/.android/debug.keystore \
+            -alias androiddebugkey \
+            -storepass android \
+            | grep -E "SHA1:|SHA-1:"
+
 
       - name: Build release APK
         run: flutter build apk --release
