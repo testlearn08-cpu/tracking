@@ -37,11 +37,13 @@ jobs:
           echo "google-services.json restored:"
           ls -la android/app/google-services.json
 
-      - name: Print signing report (SHA-1)
+      # ✅ Prints debug keystore SHA-1 (used by your current release signingConfig=debug)
+      - name: Print SHA-1 (debug keystore)
         run: |
-          ls -la android
-          chmod +x android/gradlew || true
-          android/gradlew -p android signingReport
+          echo "=== DEBUG KEYSTORE SHA-1 ==="
+          keytool -list -v -keystore ~/.android/debug.keystore \
+            -alias androiddebugkey -storepass android -keypass android \
+            | grep -E "SHA1:|SHA-1:" || true
 
       - name: Build release APK
         run: flutter build apk --release
