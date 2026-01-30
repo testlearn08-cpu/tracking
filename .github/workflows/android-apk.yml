@@ -37,6 +37,12 @@ jobs:
           echo "google-services.json restored:"
           ls -la android/app/google-services.json
 
+      # ✅ This prints SHA-1 so you can add it in Firebase for Google Sign-in
+      - name: Print signing report (SHA-1)
+        run: |
+          cd android
+          ./gradlew signingReport
+
       - name: Build release APK
         run: flutter build apk --release
 
