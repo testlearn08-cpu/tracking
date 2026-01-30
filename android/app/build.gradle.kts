@@ -2,7 +2,6 @@ plugins {
     id("com.android.application")
     id("kotlin-android")
 
-    // ✅ ADD THIS LINE
     id("com.google.gms.google-services")
 
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -17,6 +16,9 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+
+        // ✅ Required for flutter_local_notifications (Java 8+ APIs on older Android)
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -33,9 +35,15 @@ android {
 
     buildTypes {
         release {
+            // NOTE: For Play Store you must configure a real release keystore later.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+}
+
+dependencies {
+    // ✅ Desugaring library needed when isCoreLibraryDesugaringEnabled = true
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 }
 
 flutter {
