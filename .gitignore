@@ -1,0 +1,91 @@
+# =========
+# Flutter / Dart
+# =========
+.dart_tool/
+.packages
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+.pub-cache/
+coverage/
+*.lock
+
+# =========
+# IDEs / Editors
+# =========
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# macOS / Windows / Linux junk
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.swp
+*.swo
+
+# =========
+# Logs
+# =========
+*.log
+
+# =========
+# Android
+# =========
+android/.gradle/
+android/local.properties
+android/**/build/
+android/captures/
+android/.idea/
+android/*.keystore
+android/key.properties
+
+# Firebase config (KEEP OUT OF GIT)
+android/app/google-services.json
+
+# =========
+# iOS (if you add iOS later)
+# =========
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/App.framework
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Runner/GeneratedPluginRegistrant.*
+ios/Runner.xcworkspace/
+ios/Runner.xcodeproj/project.xcworkspace/
+ios/Runner.xcodeproj/xcuserdata/
+ios/.idea/
+
+# Firebase config for iOS (if added later)
+ios/Runner/GoogleService-Info.plist
+
+# =========
+# Web (if you enable web)
+# =========
+# If you store firebase config in web/index.html or firebase_options.dart,
+# keep it safe. (You can remove these lines if you intentionally commit config.)
+lib/firebase_options.dart
+
+# =========
+# Secret keys / env
+# =========
+.env
+.env.*
+*.pem
+*.p12
+*.jks
+
+# =========
+# Misc
+# =========
+*.apk
+*.aab
+*.ipa
