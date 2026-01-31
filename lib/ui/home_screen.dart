@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -53,26 +55,77 @@ class HomeScreen extends StatelessWidget {
           ),
         ],
       ),
-      body: StreamBuilder(
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
         stream: userRef.snapshots(),
         builder: (context, userSnap) {
-          if (!userSnap.hasData) return const Center(child: CircularProgressIndicator());
-          final u = userSnap.data!.data() as Map<String, dynamic>? ?? {};
+          // ✅ Show Firestore stream error instead of spinning forever
+          if (userSnap.hasError) {
+            return _ErrorState(
+              title: 'User document stream failed',
+              error: userSnap.error,
+              hint:
+                  'This is usually Firestore rules, wrong Firebase project, or network.',
+            );
+          }
+
+          // ✅ Show explicit loading state
+          if (userSnap.connectionState == ConnectionState.waiting) {
+            return const _LoadingState(text: 'Loading user document...');
+          }
+
+          if (!userSnap.hasData) {
+            return const _LoadingState(text: 'Waiting for user snapshot...');
+          }
+
+          final doc = userSnap.data!;
+          if (!doc.exists) {
+            return _ErrorState(
+              title: 'User document missing',
+              error: 'Document /users/$uid does not exist.',
+              hint:
+                  'Your LoginScreen should call _ensureUserDoc after login.\n'
+                  'If you recently changed projects/google-services.json, you may be looking at the wrong Firebase project.',
+            );
+          }
+
+          final u = doc.data() ?? {};
           final goalMinutes = (u['goalMinutes'] as num?)?.toInt() ?? 120;
           final streak = (u['streakCount'] as num?)?.toInt() ?? 0;
 
-          return FutureBuilder(
+          return FutureBuilder<_DashboardData>(
             future: _loadDashboard(db: db, uid: uid, today: today),
             builder: (context, dashSnap) {
-              if (!dashSnap.hasData) return const Center(child: CircularProgressIndicator());
-              final dash = dashSnap.data!;
+              // ✅ Show Future error instead of spinning forever
+              if (dashSnap.hasError) {
+                return _ErrorState(
+                  title: 'Dashboard load failed',
+                  error: dashSnap.error,
+                  hint:
+                      'Common causes:\n'
+                      '• Missing Firestore index (query needs composite index)\n'
+                      '• Firestore rules (even if you think they are open)\n'
+                      '• Network issue on device\n'
+                      '• Wrong Firebase project / google-services.json\n',
+                );
+              }
 
+              if (dashSnap.connectionState == ConnectionState.waiting) {
+                return const _LoadingState(text: 'Loading dashboard...');
+              }
+
+              if (!dashSnap.hasData) {
+                return const _LoadingState(text: 'Waiting for dashboard data...');
+              }
+
+              final dash = dashSnap.data!;
               final totalSec = dash.totalFocusSeconds;
               final score = dash.focusScore;
               final sessions = dash.sessions;
 
               final totalMin = (totalSec / 60).floor();
-              final progress = (goalMinutes <= 0) ? 0.0 : (totalMin / goalMinutes).clamp(0.0, 1.0);
+              final progress = (goalMinutes <= 0)
+                  ? 0.0
+                  : (totalMin / goalMinutes).clamp(0.0, 1.0);
 
               // update widget minutes
               WidgetBridge.updateTodayMinutes(totalMin);
@@ -90,7 +143,9 @@ class HomeScreen extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Text('Today', style: TextStyle(fontWeight: FontWeight.bold)),
+                                  const Text('Today',
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold)),
                                   const SizedBox(height: 8),
                                   Text('$totalMin / $goalMinutes min'),
                                   const SizedBox(height: 8),
@@ -108,7 +163,9 @@ class HomeScreen extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Text('Streak', style: TextStyle(fontWeight: FontWeight.bold)),
+                                  const Text('Streak',
+                                      style: TextStyle(
+                                          fontWeight: FontWeight.bold)),
                                   const SizedBox(height: 8),
                                   Text('🔥 $streak days'),
                                   const SizedBox(height: 8),
@@ -131,30 +188,45 @@ class HomeScreen extends StatelessWidget {
                     const SizedBox(height: 12),
                     Align(
                       alignment: Alignment.centerLeft,
-                      child: Text('Today’s sessions', style: Theme.of(context).textTheme.titleMedium),
+                      child: Text(
+                        'Today’s sessions',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Expanded(
                       child: sessions.isEmpty
-                          ? const Center(child: Text('No sessions yet. Start one!'))
+                          ? const Center(
+                              child: Text('No sessions yet. Start one!'))
                           : ListView.separated(
                               itemCount: sessions.length,
-                              separatorBuilder: (_, __) => const Divider(height: 1),
+                              separatorBuilder: (_, __) =>
+                                  const Divider(height: 1),
                               itemBuilder: (_, i) {
                                 final s = sessions[i];
                                 final id = (s['_id'] ?? '') as String;
                                 final intent = (s['intent'] ?? '') as String;
                                 final status = (s['status'] ?? '') as String;
-                                final actualSec = ((s['actualFocusSeconds'] ?? 0) as num).toInt();
+                                final actualSec =
+                                    ((s['actualFocusSeconds'] ?? 0) as num)
+                                        .toInt();
                                 final mins = (actualSec / 60).floor();
 
                                 return ListTile(
-                                  title: Text(intent.isEmpty ? '(No intent)' : intent,
-                                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  title: Text(
+                                    intent.isEmpty ? '(No intent)' : intent,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                   subtitle: Text('$mins min • $status'),
                                   onTap: () => Navigator.push(
                                     context,
-                                    MaterialPageRoute(builder: (_) => SessionDetailScreen(uid: uid, sessionId: id)),
+                                    MaterialPageRoute(
+                                      builder: (_) => SessionDetailScreen(
+                                        uid: uid,
+                                        sessionId: id,
+                                      ),
+                                    ),
                                   ),
                                 );
                               },
@@ -241,8 +313,13 @@ Future<_DashboardData> _loadDashboard({
   required String uid,
   required String today,
 }) async {
-  final statsRef = db.collection('users').doc(uid).collection('dailyStats').doc(today);
-  final statsSnap = await statsRef.get();
+  // ✅ Add timeouts so "hangs" become visible errors
+  const timeout = Duration(seconds: 10);
+
+  final statsRef =
+      db.collection('users').doc(uid).collection('dailyStats').doc(today);
+
+  final statsSnap = await statsRef.get().timeout(timeout);
   final stats = statsSnap.data() ?? {};
   final totalSec = ((stats['totalFocusSeconds'] ?? 0) as num).toInt();
   final score = ((stats['focusScore'] ?? 0) as num).toInt();
@@ -254,7 +331,8 @@ Future<_DashboardData> _loadDashboard({
       .where('localDate', isEqualTo: today)
       .orderBy('startedAt', descending: true)
       .limit(5)
-      .get();
+      .get()
+      .timeout(timeout);
 
   final sessions = sessionsQ.docs.map((d) {
     final m = d.data();
@@ -262,5 +340,83 @@ Future<_DashboardData> _loadDashboard({
     return m;
   }).toList();
 
-  return _DashboardData(totalFocusSeconds: totalSec, focusScore: score, sessions: sessions);
+  return _DashboardData(
+    totalFocusSeconds: totalSec,
+    focusScore: score,
+    sessions: sessions,
+  );
+}
+
+class _LoadingState extends StatelessWidget {
+  const _LoadingState({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: 12),
+            Text(text, textAlign: TextAlign.center),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorState extends StatelessWidget {
+  const _ErrorState({
+    required this.title,
+    required this.error,
+    required this.hint,
+  });
+
+  final String title;
+  final Object? error;
+  final String hint;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 520),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: Theme.of(context)
+                    .textTheme
+                    .titleLarge
+                    ?.copyWith(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '$error',
+                style: const TextStyle(fontFamily: 'monospace'),
+              ),
+              const SizedBox(height: 12),
+              Text(hint),
+              const SizedBox(height: 16),
+              OutlinedButton(
+                onPressed: () {
+                  // Quick retry: rebuild this screen
+                  (context as Element).markNeedsBuild();
+                },
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
