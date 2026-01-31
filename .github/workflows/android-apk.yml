@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android Release APK
 
 on:
   workflow_dispatch:
@@ -28,25 +28,7 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
-      # ✅ Restore stable debug keystore from split secrets (prevents truncation)
-      - name: Restore debug.keystore (stable)
-        env:
-          P1: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P1 }}
-          P2: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P2 }}
-          P3: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P3 }}
-          P4: ${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P4 }}
-        run: |
-          mkdir -p ~/.android
-          printf '%s%s%s%s' "$P1" "$P2" "$P3" "$P4" | base64 -d > ~/.android/debug.keystore
-          chmod 600 ~/.android/debug.keystore
-          echo "debug.keystore restored:"
-          ls -la ~/.android/debug.keystore
-          echo "sha256(debug.keystore):"
-          sha256sum ~/.android/debug.keystore || true
-          echo "file type:"
-          file ~/.android/debug.keystore || true
-
-      # ✅ Restore Firebase google-services.json
+      # ✅ Restore google-services.json
       - name: Restore google-services.json
         env:
           P1: ${{ secrets.GSJ_B64_P1 }}
@@ -54,35 +36,39 @@ jobs:
         run: |
           mkdir -p android/app
           printf '%s%s' "$P1" "$P2" | base64 -d > android/app/google-services.json
-          echo "google-services.json restored:"
-          ls -la android/app/google-services.json
-          echo "Validate JSON:"
-          python3 - <<'PY'
-          import json
-          with open("android/app/google-services.json","r",encoding="utf-8") as f:
-              json.load(f)
-          print("google-services.json is valid JSON ✅")
-          PY
 
-
-      # ✅ Print SHA-1 from restored keystore
-      - name: Print SHA-1 (stable keystore)
+      # ✅ Restore RELEASE keystore (THIS is what fixes Google Sign-In)
+      - name: Restore release keystore
+        shell: bash
         run: |
-          set +e
-          echo "=== LIST KEYSTORE (alias + SHA-1) ==="
-          keytool -list -v \
-            -keystore ~/.android/debug.keystore \
-            -storepass android \
-            2>&1 | tee /tmp/keytool_all.txt
+          echo "${{ secrets.UPLOAD_KEYSTORE_B64_P1 }}${{ secrets.UPLOAD_KEYSTORE_B64_P2 }}${{ secrets.UPLOAD_KEYSTORE_B64_P3 }}${{ secrets.UPLOAD_KEYSTORE_B64_P4 }}" | base64 -d > android/upload-keystore.jks
+          ls -lah android/upload-keystore.jks
 
-          echo "=== GREP SHA-1 lines ==="
-          cat /tmp/keytool_all.txt | grep -E "Alias name:|SHA1:|SHA-1:" || true
+      # ✅ Write key.properties used by Gradle signingConfigs.release
+      - name: Create key.properties
+        shell: bash
+        run: |
+          cat > android/key.properties <<EOF
+          storePassword=${{ secrets.UPLOAD_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.UPLOAD_KEY_PASSWORD }}
+          keyAlias=${{ secrets.UPLOAD_KEY_ALIAS }}
+          storeFile=../upload-keystore.jks
+          EOF
 
+      # ✅ Build RELEASE APK (now correctly signed)
       - name: Build release APK
         run: flutter build apk --release
+
+      # ✅ Verify SHA-1 (must match Firebase)
+      - name: Verify signing SHA-1
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y apksigner
+          apksigner verify --print-certs build/app/outputs/flutter-apk/app-release.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: focusflow-apk
+          name: focusflow-release-apk
           path: build/app/outputs/flutter-apk/app-release.apk
