@@ -41,7 +41,7 @@ jobs:
       - name: Restore release keystore
         shell: bash
         run: |
-          echo "${{ secrets.UPLOAD_KEYSTORE_B64_P1 }}${{ secrets.UPLOAD_KEYSTORE_B64_P2 }}${{ secrets.UPLOAD_KEYSTORE_B64_P3 }}${{ secrets.UPLOAD_KEYSTORE_B64_P4 }}" | base64 -d > android/upload-keystore.jks
+          echo "${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P1 }}${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P2 }}${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P3 }}${{ secrets.ANDROID_DEBUG_KEYSTORE_B64_P4 }}" | base64 -d > android/upload-keystore.jks
           ls -lah android/upload-keystore.jks
 
       # ✅ Write key.properties used by Gradle signingConfigs.release
