@@ -53,3 +53,17 @@ source ~/.bashrc
 
 flutter --version
 flutter doctor
+
+# To create secret code in split
+## run cmd
+base64 -w 0 android/app/google-services.json > /tmp/gsj.b64
+wc -c /tmp/gsj.b64
+split -b 1200 /tmp/gsj.b64 /tmp/gsj_part_
+ls -la /tmp/gsj_part_*
+<
+for f in /tmp/gsj_part_*; do
+  echo "==== $f ===="
+  cat "$f"
+  echo
+done
+>
