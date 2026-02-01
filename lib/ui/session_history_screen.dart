@@ -13,6 +13,13 @@ class SessionHistoryScreen extends StatefulWidget {
 }
 
 class _SessionHistoryScreenState extends State<SessionHistoryScreen> {
+  // Modern colors
+  static const _bgTop = Color(0xFF0B1220);
+  static const _bgBottom = Color(0xFF070B14);
+  static const _card = Color(0xFF0F172A);
+  static const _chip = Color(0xFF111A2D);
+  static const _accent = Color(0xFF6C63FF);
+
   HistoryFilter filter = HistoryFilter.today;
 
   String _fmtYmd(DateTime dt) {
@@ -23,7 +30,6 @@ class _SessionHistoryScreenState extends State<SessionHistoryScreen> {
   }
 
   (String start, String end) _rangeForFilter() {
-    // IST range based on current time
     final nowUtc = DateTime.now().toUtc();
     final ist = nowUtc.add(const Duration(hours: 5, minutes: 30));
     final end = _fmtYmd(ist);
@@ -40,9 +46,18 @@ class _SessionHistoryScreenState extends State<SessionHistoryScreen> {
         startDt = ist.subtract(const Duration(days: 29));
         break;
     }
+    return (_fmtYmd(startDt), end);
+  }
 
-    final start = _fmtYmd(startDt);
-    return (start, end);
+  String _filterLabel(HistoryFilter f) {
+    switch (f) {
+      case HistoryFilter.today:
+        return 'Today';
+      case HistoryFilter.week:
+        return 'Week';
+      case HistoryFilter.month:
+        return 'Month';
+    }
   }
 
   @override
@@ -50,6 +65,9 @@ class _SessionHistoryScreenState extends State<SessionHistoryScreen> {
     final db = FirebaseFirestore.instance;
     final (start, end) = _rangeForFilter();
 
+    // ✅ IMPORTANT: This avoids the composite index error.
+    // Only range filter on localDate and orderBy localDate (same field).
+    // Then we sort by startedAt client-side.
     final q = db
         .collection('users')
         .doc(widget.uid)
@@ -57,30 +75,29 @@ class _SessionHistoryScreenState extends State<SessionHistoryScreen> {
         .where('localDate', isGreaterThanOrEqualTo: start)
         .where('localDate', isLessThanOrEqualTo: end)
         .orderBy('localDate', descending: true)
-        .orderBy('startedAt', descending: true)
-        .limit(200);
+        .limit(250);
 
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text('Session History'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text('Session History', style: TextStyle(fontWeight: FontWeight.w800)),
       ),
+      extendBodyBehindAppBar: true,
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFF0B1220),
-              Color(0xFF070B14),
-            ],
+            colors: [_bgTop, _bgBottom],
           ),
         ),
         child: SafeArea(
           child: Column(
             children: [
-              // Filter row (modern chips)
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
                 child: Row(
                   children: [
                     _FilterChip(
@@ -103,56 +120,63 @@ class _SessionHistoryScreenState extends State<SessionHistoryScreen> {
                     const Spacer(),
                     Text(
                       '$start → $end',
-                      style: const TextStyle(color: Colors.white38, fontSize: 12),
+                      style: const TextStyle(color: Colors.white38, fontWeight: FontWeight.w600),
                     ),
                   ],
                 ),
               ),
-
               Expanded(
                 child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  // Key forces StreamBuilder to fully rewire when filter changes
-                  key: ValueKey('${filter.name}-$start-$end'),
                   stream: q.snapshots(),
                   builder: (context, snap) {
-                    // ✅ IMPORTANT: show errors (fixes "infinite loading")
                     if (snap.hasError) {
                       return _ModernError(
                         title: 'History load failed',
                         error: snap.error,
                         hint:
-                            'Most common causes:\n'
-                            '• Missing Firestore composite index (FAILED_PRECONDITION)\n'
-                            '• Firestore rules (PERMISSION_DENIED)\n\n'
-                            'For this query, you likely need a composite index on:\n'
-                            'localDate (desc) + startedAt (desc)\n\n'
-                            'Open your console error link and click Create.',
+                            'This screen avoids the composite index.\n'
+                            'If you still see FAILED_PRECONDITION, verify your code has NO orderBy(startedAt).',
                       );
                     }
-
-                    if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+                    if (!snap.hasData) {
                       return const _ModernLoading(text: 'Loading history...');
                     }
 
-                    final docs = snap.data?.docs ?? [];
+                    final docs = snap.data!.docs;
+
                     if (docs.isEmpty) {
-                      return const Center(
+                      return Center(
                         child: Text(
-                          'No sessions found',
-                          style: TextStyle(color: Colors.white60),
+                          'No sessions for ${_filterLabel(filter)}',
+                          style: const TextStyle(color: Colors.white60),
                         ),
                       );
                     }
 
-                    return ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
-                      itemCount: docs.length,
-                      separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
-                      itemBuilder: (_, i) {
-                        final doc = docs[i];
-                        final d = doc.data();
-                        final id = doc.id;
+                    // ✅ client-side sort: localDate desc, startedAt desc
+                    final sorted = [...docs]..sort((a, b) {
+                        final ad = a.data();
+                        final bd = b.data();
 
+                        final al = (ad['localDate'] ?? '') as String;
+                        final bl = (bd['localDate'] ?? '') as String;
+                        final cmpDate = bl.compareTo(al);
+                        if (cmpDate != 0) return cmpDate;
+
+                        final at = (ad['startedAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
+                        final bt = (bd['startedAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
+                        return bt.compareTo(at);
+                      });
+
+                    return ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                      itemCount: sorted.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (_, i) {
+                        final doc = sorted[i];
+                        final d = doc.data();
+
+                        final id = doc.id;
                         final intent = (d['intent'] ?? '') as String;
                         final status = (d['status'] ?? '') as String;
                         final result = (d['result'] ?? '') as String;
@@ -161,30 +185,64 @@ class _SessionHistoryScreenState extends State<SessionHistoryScreen> {
                         final seconds = ((d['actualFocusSeconds'] ?? 0) as num).toInt();
                         final mins = (seconds / 60).floor();
 
-                        final subtitleParts = <String>[
+                        final subtitle = [
                           localDate,
                           '$mins min',
                           status,
                           if (result.isNotEmpty) result,
-                        ];
+                        ].join(' • ');
 
-                        return ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: 6),
-                          title: Text(
-                            intent.isEmpty ? '(No intent)' : intent,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-                          ),
-                          subtitle: Text(
-                            subtitleParts.join(' • '),
-                            style: const TextStyle(color: Colors.white60),
-                          ),
-                          trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+                        return InkWell(
                           onTap: () => Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) => SessionDetailScreen(uid: widget.uid, sessionId: id),
+                            ),
+                          ),
+                          borderRadius: BorderRadius.circular(18),
+                          child: Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: _card,
+                              borderRadius: BorderRadius.circular(18),
+                              border: Border.all(color: Colors.white10),
+                              boxShadow: const [
+                                BoxShadow(
+                                  blurRadius: 24,
+                                  color: Colors.black38,
+                                  offset: Offset(0, 10),
+                                )
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        intent.isEmpty ? '(No intent)' : intent,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w800,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        subtitle,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(color: Colors.white60, fontWeight: FontWeight.w600),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                const Icon(Icons.chevron_right, color: Colors.white38),
+                              ],
                             ),
                           ),
                         );
@@ -202,15 +260,13 @@ class _SessionHistoryScreenState extends State<SessionHistoryScreen> {
 }
 
 class _FilterChip extends StatelessWidget {
-  const _FilterChip({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
+  const _FilterChip({required this.label, required this.selected, required this.onTap});
   final String label;
   final bool selected;
   final VoidCallback onTap;
+
+  static const _accent = Color(0xFF6C63FF);
+  static const _chip = Color(0xFF111A2D);
 
   @override
   Widget build(BuildContext context) {
@@ -218,9 +274,9 @@ class _FilterChip extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(999),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: selected ? const Color(0xFF4F46E5) : const Color(0xFF0F172A),
+          color: selected ? _accent : _chip,
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: Colors.white10),
         ),
@@ -228,8 +284,7 @@ class _FilterChip extends StatelessWidget {
           label,
           style: TextStyle(
             color: selected ? Colors.white : Colors.white70,
-            fontWeight: FontWeight.w700,
-            fontSize: 12,
+            fontWeight: FontWeight.w800,
           ),
         ),
       ),
@@ -249,11 +304,7 @@ class _ModernLoading extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(
-              width: 34,
-              height: 34,
-              child: CircularProgressIndicator(strokeWidth: 3),
-            ),
+            const SizedBox(width: 34, height: 34, child: CircularProgressIndicator(strokeWidth: 3)),
             const SizedBox(height: 12),
             Text(text, style: const TextStyle(color: Colors.white60)),
           ],
@@ -264,11 +315,7 @@ class _ModernLoading extends StatelessWidget {
 }
 
 class _ModernError extends StatelessWidget {
-  const _ModernError({
-    required this.title,
-    required this.error,
-    required this.hint,
-  });
+  const _ModernError({required this.title, required this.error, required this.hint});
 
   final String title;
   final Object? error;
@@ -292,15 +339,9 @@ class _ModernError extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
-                ),
+                Text(title, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900)),
                 const SizedBox(height: 10),
-                Text(
-                  '$error',
-                  style: const TextStyle(color: Colors.white70, fontFamily: 'monospace'),
-                ),
+                Text('$error', style: const TextStyle(color: Colors.white70, fontFamily: 'monospace')),
                 const SizedBox(height: 10),
                 Text(hint, style: const TextStyle(color: Colors.white60)),
               ],
