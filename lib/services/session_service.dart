@@ -14,9 +14,11 @@ class SessionService {
   final FirebaseFirestore db;
   final StatsService statsService;
 
-  DocumentReference<Map<String, dynamic>> _userRef(String uid) => db.collection('users').doc(uid);
+  DocumentReference<Map<String, dynamic>> _userRef(String uid) =>
+      db.collection('users').doc(uid);
 
-  CollectionReference<Map<String, dynamic>> _sessionsCol(String uid) => _userRef(uid).collection('sessions');
+  CollectionReference<Map<String, dynamic>> _sessionsCol(String uid) =>
+      _userRef(uid).collection('sessions');
 
   Future<StartedSession> startSession({
     required String uid,
@@ -74,6 +76,7 @@ class SessionService {
     if (actual > plannedFocusSeconds) overtime = actual - plannedFocusSeconds;
 
     if (!endedNormally) {
+      // Cancelled sessions should not count overtime.
       overtime = 0;
       if (actual > plannedFocusSeconds) actual = plannedFocusSeconds;
     }
@@ -85,6 +88,17 @@ class SessionService {
       'status': endedNormally ? 'completed' : 'cancelled',
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    // ✅ IMPORTANT: Update dailyStats immediately when a session completes.
+    // This makes HomeScreen show minutes/score without waiting for feedback.
+    if (endedNormally && actual > 0) {
+      await statsService.applySessionToDailyStatsAndStreak(
+        uid: uid,
+        sessionFocusSeconds: actual,
+        sessionResult: null, // result added later in feedback
+        distractionLevel: null, // distraction added later in feedback
+      );
+    }
   }
 
   Future<void> submitFeedbackAndUpdateStats({
@@ -99,10 +113,6 @@ class SessionService {
     final snap = await ref.get();
     if (!snap.exists) throw StateError('Session not found');
 
-    final data = snap.data()!;
-    final status = (data['status'] as String?) ?? 'running';
-    final actual = (data['actualFocusSeconds'] as num?)?.toInt() ?? 0;
-
     await ref.update({
       'result': result,
       'distractionLevel': distractionLevel,
@@ -111,13 +121,11 @@ class SessionService {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    if (status == 'completed' && actual > 0) {
-      await statsService.applySessionToDailyStatsAndStreak(
-        uid: uid,
-        sessionFocusSeconds: actual,
-        sessionResult: result,
-        distractionLevel: distractionLevel,
-      );
-    }
+    // ✅ Optional: If you want score to reflect result/distraction,
+    // you can re-apply stats (but then you must implement "recompute day"
+    // or store per-session contribution).
+    //
+    // For now we keep it simple: minutes/streak update at endSession(),
+    // feedback just stores fields.
   }
 }

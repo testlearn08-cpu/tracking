@@ -27,11 +27,24 @@ class TimerScreen extends StatefulWidget {
 
 class _TimerScreenState extends State<TimerScreen> {
   int pausedSeconds = 0;
+  DateTime? pauseStartedAt;
 
   String _fmt(int s) {
     final m = (s ~/ 60).toString().padLeft(2, '0');
     final r = (s % 60).toString().padLeft(2, '0');
     return '$m:$r';
+  }
+
+  void _onPaused() {
+    pauseStartedAt = DateTime.now();
+  }
+
+  void _onResumed() {
+    final start = pauseStartedAt;
+    if (start != null) {
+      pausedSeconds += DateTime.now().difference(start).inSeconds;
+    }
+    pauseStartedAt = null;
   }
 
   @override
@@ -49,6 +62,7 @@ class _TimerScreenState extends State<TimerScreen> {
 
           final remaining = snap.data ?? a.remainingSeconds();
 
+          // ✅ Auto-finish
           if (remaining <= 0 && a.status == TimerStatus.running) {
             WidgetsBinding.instance.addPostFrameCallback((_) async {
               if (!mounted) return;
@@ -57,7 +71,9 @@ class _TimerScreenState extends State<TimerScreen> {
                 await sessionService.endSession(
                   uid: widget.uid,
                   sessionId: widget.sessionId,
-                  startedAt: DateTime.fromMillisecondsSinceEpoch(widget.startedAtEpochMs),
+                  startedAt: DateTime.fromMillisecondsSinceEpoch(
+                    widget.startedAtEpochMs,
+                  ),
                   plannedFocusSeconds: widget.plannedFocusSeconds,
                   endedNormally: true,
                   totalPausedSeconds: pausedSeconds,
@@ -77,7 +93,9 @@ class _TimerScreenState extends State<TimerScreen> {
                   if (!mounted) return;
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => BreakScreen(uid: widget.uid)),
+                    MaterialPageRoute(
+                      builder: (_) => BreakScreen(uid: widget.uid),
+                    ),
                   );
                 } else {
                   await NotificationService.instance.cancelAll();
@@ -85,7 +103,12 @@ class _TimerScreenState extends State<TimerScreen> {
                   if (!mounted) return;
                   Navigator.pushReplacement(
                     context,
-                    MaterialPageRoute(builder: (_) => FeedbackScreen(uid: widget.uid, sessionId: widget.sessionId)),
+                    MaterialPageRoute(
+                      builder: (_) => FeedbackScreen(
+                        uid: widget.uid,
+                        sessionId: widget.sessionId,
+                      ),
+                    ),
                   );
                 }
               }
@@ -98,8 +121,13 @@ class _TimerScreenState extends State<TimerScreen> {
               children: [
                 Text(a.intent, style: const TextStyle(fontSize: 18)),
                 const SizedBox(height: 24),
-                Text(_fmt(remaining < 0 ? 0 : remaining),
-                    style: const TextStyle(fontSize: 56, fontWeight: FontWeight.bold)),
+                Text(
+                  _fmt(remaining < 0 ? 0 : remaining),
+                  style: const TextStyle(
+                    fontSize: 56,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 const SizedBox(height: 24),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
@@ -107,21 +135,32 @@ class _TimerScreenState extends State<TimerScreen> {
                     ElevatedButton(
                       onPressed: () async {
                         if (a.status == TimerStatus.running) {
+                          _onPaused();
                           await timer.pause();
                         } else if (a.status == TimerStatus.paused) {
+                          _onResumed();
                           await timer.resume();
                         }
                         setState(() {});
                       },
-                      child: Text(a.status == TimerStatus.running ? 'Pause' : 'Resume'),
+                      child: Text(
+                        a.status == TimerStatus.running ? 'Pause' : 'Resume',
+                      ),
                     ),
                     const SizedBox(width: 12),
                     ElevatedButton(
                       onPressed: () async {
+                        // If currently paused, count it
+                        if (a.status == TimerStatus.paused) {
+                          _onResumed();
+                        }
+
                         await sessionService.endSession(
                           uid: widget.uid,
                           sessionId: widget.sessionId,
-                          startedAt: DateTime.fromMillisecondsSinceEpoch(widget.startedAtEpochMs),
+                          startedAt: DateTime.fromMillisecondsSinceEpoch(
+                            widget.startedAtEpochMs,
+                          ),
                           plannedFocusSeconds: widget.plannedFocusSeconds,
                           endedNormally: false,
                           totalPausedSeconds: pausedSeconds,
@@ -131,13 +170,23 @@ class _TimerScreenState extends State<TimerScreen> {
                         if (!mounted) return;
                         Navigator.pushReplacement(
                           context,
-                          MaterialPageRoute(builder: (_) => FeedbackScreen(uid: widget.uid, sessionId: widget.sessionId)),
+                          MaterialPageRoute(
+                            builder: (_) => FeedbackScreen(
+                              uid: widget.uid,
+                              sessionId: widget.sessionId,
+                            ),
+                          ),
                         );
                       },
                       child: const Text('End'),
                     ),
                   ],
-                )
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Paused total: ${_fmt(pausedSeconds)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
               ],
             ),
           );
