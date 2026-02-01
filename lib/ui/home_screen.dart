@@ -1,4 +1,3 @@
-// lib/ui/home_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -26,111 +25,70 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // Colors (modern “CSS-like” look)
-  static const _bgTop = Color(0xFF0B1220);
-  static const _bgBottom = Color(0xFF070B14);
-  static const _card = Color(0xFF0F172A);
-  static const _card2 = Color(0xFF111A2D);
-  static const _accent = Color(0xFF6C63FF);
+  /// If Firestore takes time to reflect writes (rare but can happen with cache/network),
+  /// we show the created session immediately as a "pending" card.
+  final Map<String, _PendingSession> _pending = {};
 
-  Future<void> _startFlow(BuildContext context, {int? presetOverride}) async {
-    final pre = await Navigator.push<PreSessionResult>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PreSessionScreen(initialPresetMinutes: presetOverride),
-      ),
-    );
-    if (pre == null) return;
+  /// So we can refresh UI while the timer is running/paused.
+  late final TimerController _timer;
 
-    final sessionService = context.read<SessionService>();
-    final started = await sessionService.startSession(
-      uid: widget.uid,
-      intent: pre.intent,
-      category: pre.category,
-      presetMinutes: pre.presetMinutes,
-      breakMinutes: pre.breakMinutes,
-      autoBreak: pre.autoBreak,
-    );
+  @override
+  void initState() {
+    super.initState();
 
-    final timer = context.read<TimerController>();
-    await timer.startFocus(
-      uid: widget.uid,
-      sessionId: started.sessionId,
-      intent: pre.intent,
-      focusSeconds: pre.presetMinutes * 60,
-      breakSeconds: pre.breakMinutes * 60,
-      autoBreak: pre.autoBreak,
-    );
+    _timer = context.read<TimerController>();
 
-    await NotificationService.instance.cancelAll();
-    await NotificationService.instance.scheduleTimerDone(
-      id: 1001,
-      fromNow: Duration(seconds: pre.presetMinutes * 60),
-      title: 'Focus complete ✅',
-      body: 'Nice. Log your feedback.',
-    );
+    // Restore active timer (if app was killed / reopened)
+    // Safe to call multiple times.
+    _timer.restoreIfAny().then((_) {
+      if (mounted) setState(() {});
+    });
 
-    if (!mounted) return;
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => TimerScreen(
-          uid: widget.uid,
-          sessionId: started.sessionId,
-          startedAtEpochMs: started.startedAt.toDate().millisecondsSinceEpoch,
-          plannedFocusSeconds: pre.presetMinutes * 60,
-        ),
-      ),
-    );
+    // Rebuild home when ticker updates (so banner/button labels update)
+    _timer.remainingStream.listen((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final db = FirebaseFirestore.instance;
-    final uid = widget.uid;
+    final userRef = db.collection('users').doc(widget.uid);
 
-    final userRef = db.collection('users').doc(uid);
     final today = localDateKolkataYmd();
     final statsRef = userRef.collection('dailyStats').doc(today);
 
-    // ✅ IMPORTANT:
-    // Avoid composite-index requirement by NOT using orderBy with where(localDate == today).
-    // We sort client-side so sessions appear instantly after creation.
-    final sessionsQuery = userRef.collection('sessions').where('localDate', isEqualTo: today).limit(50);
+    final sessionsQuery = userRef
+        .collection('sessions')
+        .where('localDate', isEqualTo: today)
+        .orderBy('startedAt', descending: true)
+        .limit(30);
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: const Color(0xFF070B14),
       appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        titleSpacing: 16,
-        title: const Text(
-          'FocusFlow',
-          style: TextStyle(fontWeight: FontWeight.w800),
-        ),
+        title: const Text('FocusFlow'),
+        backgroundColor: const Color(0xFF0B1220),
         actions: [
           IconButton(
-            tooltip: 'History',
             icon: const Icon(Icons.history),
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => SessionHistoryScreen(uid: uid)),
+              MaterialPageRoute(builder: (_) => SessionHistoryScreen(uid: widget.uid)),
             ),
           ),
           IconButton(
-            tooltip: 'Reports',
             icon: const Icon(Icons.bar_chart),
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => ReportsScreen(uid: uid)),
+              MaterialPageRoute(builder: (_) => ReportsScreen(uid: widget.uid)),
             ),
           ),
           IconButton(
-            tooltip: 'Settings',
             icon: const Icon(Icons.settings),
             onPressed: () => Navigator.push(
               context,
-              MaterialPageRoute(builder: (_) => SettingsScreen(uid: uid)),
+              MaterialPageRoute(builder: (_) => SettingsScreen(uid: widget.uid)),
             ),
           ),
           PopupMenuButton<String>(
@@ -142,17 +100,16 @@ class _HomeScreenState extends State<HomeScreen> {
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'signout', child: Text('Sign out')),
             ],
-          ),
-          const SizedBox(width: 8),
+          )
         ],
       ),
-      extendBodyBehindAppBar: true,
+
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [_bgTop, _bgBottom],
+            colors: [Color(0xFF0B1220), Color(0xFF070B14)],
           ),
         ),
         child: SafeArea(
@@ -163,21 +120,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 return _ModernError(
                   title: 'User load failed',
                   error: userSnap.error,
-                  hint: 'Usually Firestore rules / wrong project / network.',
+                  hint: 'Check Firestore rules / correct Firebase project / network.',
                 );
               }
-              if (!userSnap.hasData) {
-                return const _ModernLoading(text: 'Loading user...');
-              }
+              if (!userSnap.hasData) return const _ModernLoading(text: 'Loading user...');
 
               final userDoc = userSnap.data!;
               if (!userDoc.exists) {
                 return _ModernError(
                   title: 'User document missing',
-                  error: 'Document /users/$uid does not exist.',
+                  error: 'Document /users/${widget.uid} does not exist.',
                   hint:
-                      'Your login should create the user doc after sign-in (ensureUserDoc).\n'
-                      'If you changed google-services.json, confirm you are on the correct Firebase project.',
+                      'Ensure you create /users/{uid} after sign-in.\n'
+                      'Also confirm google-services.json belongs to the same project.',
                 );
               }
 
@@ -192,17 +147,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     return _ModernError(
                       title: 'Stats load failed',
                       error: statsSnap.error,
-                      hint: 'Stats doc path: users/$uid/dailyStats/$today',
+                      hint: 'Stats path: users/${widget.uid}/dailyStats/$today',
                     );
                   }
 
                   final stats = statsSnap.data?.data() ?? {};
                   final totalSec = ((stats['totalFocusSeconds'] ?? 0) as num).toInt();
-                  final score = ((stats['focusScore'] ?? 0) as num).toInt();
                   final totalMin = (totalSec / 60).floor();
                   final progress = (goalMinutes <= 0) ? 0.0 : (totalMin / goalMinutes).clamp(0.0, 1.0);
 
-                  // Widget update (safe to call repeatedly)
+                  // Home widget update (safe to call repeatedly)
                   WidgetBridge.updateTodayMinutes(totalMin);
 
                   return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -213,139 +167,216 @@ class _HomeScreenState extends State<HomeScreen> {
                           title: 'Sessions load failed',
                           error: sessSnap.error,
                           hint:
-                              'If you see PERMISSION_DENIED: fix Firestore rules.\n'
-                              'If you see FAILED_PRECONDITION: usually a composite index; we removed orderBy here, so it should not require one.',
+                              'If FAILED_PRECONDITION => create Firestore index.\n'
+                              'If PERMISSION_DENIED => update Firestore rules.',
                         );
                       }
 
                       final docs = sessSnap.data?.docs ?? [];
 
-                      // Sort client-side so newest shows first (without needing index)
-                      final sessions = [...docs]..sort((a, b) {
-                          final am = a.data();
-                          final bm = b.data();
-                          final at = (am['startedAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
-                          final bt = (bm['startedAt'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
-                          return bt.compareTo(at);
-                        });
+                      // If Firestore stream contains any pending ids, remove them from pending.
+                      if (docs.isNotEmpty && _pending.isNotEmpty) {
+                        final ids = docs.map((e) => e.id).toSet();
+                        final toRemove = <String>[];
+                        for (final k in _pending.keys) {
+                          if (ids.contains(k)) toRemove.add(k);
+                        }
+                        if (toRemove.isNotEmpty) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!mounted) return;
+                            setState(() {
+                              for (final k in toRemove) {
+                                _pending.remove(k);
+                              }
+                            });
+                          });
+                        }
+                      }
 
-                      return CustomScrollView(
-                        slivers: [
-                          SliverToBoxAdapter(
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _TopBadgesRow(streak: streak, score: score),
-                                  const SizedBox(height: 14),
+                      final hasData = sessSnap.hasData;
 
-                                  // Two cards like your light screenshot (Today + Streak)
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: _SmallCard(
-                                          title: 'Today',
-                                          big: '$totalMin / $goalMinutes min',
-                                          bottom: LinearProgressIndicator(
-                                            value: progress,
-                                            minHeight: 6,
-                                            backgroundColor: Colors.white10,
-                                            color: _accent,
-                                            borderRadius: BorderRadius.circular(999),
+                      return Column(
+                        children: [
+                          Expanded(
+                            child: CustomScrollView(
+                              slivers: [
+                                SliverToBoxAdapter(
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        _HeaderRow(streak: streak),
+                                        const SizedBox(height: 14),
+
+                                        // Resume banner if timer exists
+                                        if (_timer.active != null) ...[
+                                          _ActiveTimerBanner(
+                                            timer: _timer,
+                                            onResume: () => _resumeActiveTimer(context),
+                                            onEnd: () => _endActiveTimerFromHome(context),
+                                          ),
+                                          const SizedBox(height: 14),
+                                        ],
+
+                                        _BigProgressCard(
+                                          totalMin: totalMin,
+                                          goalMinutes: goalMinutes,
+                                          progress: progress,
+                                        ),
+                                        const SizedBox(height: 14),
+
+                                        const Text(
+                                          'Quick start',
+                                          style: TextStyle(
+                                            color: Colors.white70,
+                                            fontWeight: FontWeight.w700,
+                                            letterSpacing: 0.2,
                                           ),
                                         ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: _SmallCard(
-                                          title: 'Streak',
-                                          big: '🔥  $streak days',
-                                          bottom: Text(
-                                            'Score: $score',
-                                            style: const TextStyle(color: Colors.white60, fontWeight: FontWeight.w600),
+                                        const SizedBox(height: 10),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: _QuickStartChip(
+                                                labelTop: '25',
+                                                labelBottom: 'Pomodoro',
+                                                onTap: () => _startFlow(context, presetOverride: 25),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: _QuickStartChip(
+                                                labelTop: '50',
+                                                labelBottom: 'Short',
+                                                onTap: () => _startFlow(context, presetOverride: 50),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: _QuickStartChip(
+                                                labelTop: '90',
+                                                labelBottom: 'Long',
+                                                onTap: () => _startFlow(context, presetOverride: 90),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+
+                                        const SizedBox(height: 18),
+
+                                        const Text(
+                                          'Today’s sessions',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w800,
                                           ),
                                         ),
-                                      ),
-                                    ],
-                                  ),
-
-                                  const SizedBox(height: 14),
-
-                                  // ✅ Start button (you said it’s missing)
-                                  _PrimaryStartButton(
-                                    label: 'Start Focus',
-                                    onTap: () => _startFlow(context),
-                                  ),
-
-                                  const SizedBox(height: 18),
-
-                                  const Text(
-                                    'Today’s sessions',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w800,
+                                        const SizedBox(height: 10),
+                                      ],
                                     ),
                                   ),
-                                  const SizedBox(height: 10),
-                                ],
-                              ),
+                                ),
+
+                                // Pending session cards first (optimistic)
+                                if (_pending.isNotEmpty)
+                                  SliverList(
+                                    delegate: SliverChildBuilderDelegate(
+                                      (context, index) {
+                                        final item = _pending.values.toList()[index];
+                                        return Padding(
+                                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                                          child: _PendingSessionCard(item: item),
+                                        );
+                                      },
+                                      childCount: _pending.length,
+                                    ),
+                                  ),
+
+                                if (!hasData)
+                                  const SliverFillRemaining(
+                                    child: _ModernLoading(text: 'Loading sessions...'),
+                                  )
+                                else if (docs.isEmpty && _pending.isEmpty)
+                                  const SliverFillRemaining(
+                                    hasScrollBody: false,
+                                    child: Center(
+                                      child: Text(
+                                        'No sessions yet. Start one!',
+                                        style: TextStyle(color: Colors.white60),
+                                      ),
+                                    ),
+                                  )
+                                else
+                                  SliverList.separated(
+                                    itemCount: docs.length,
+                                    separatorBuilder: (_, __) => const Padding(
+                                      padding: EdgeInsets.symmetric(horizontal: 16),
+                                      child: Divider(color: Colors.white10, height: 1),
+                                    ),
+                                    itemBuilder: (_, i) {
+                                      final d = docs[i];
+                                      final m = d.data();
+                                      final id = d.id;
+
+                                      final intent = (m['intent'] ?? '') as String;
+                                      final status = (m['status'] ?? '') as String;
+                                      final actualSec = ((m['actualFocusSeconds'] ?? 0) as num).toInt();
+                                      final mins = (actualSec / 60).floor();
+
+                                      return Padding(
+                                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                                        child: ListTile(
+                                          contentPadding: const EdgeInsets.symmetric(horizontal: 0),
+                                          title: Text(
+                                            intent.isEmpty ? '(No intent)' : intent,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                          ),
+                                          subtitle: Text(
+                                            '$mins min • $status',
+                                            style: const TextStyle(color: Colors.white60),
+                                          ),
+                                          trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+                                          onTap: () => Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => SessionDetailScreen(uid: widget.uid, sessionId: id),
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+
+                                const SliverToBoxAdapter(child: SizedBox(height: 14)),
+                              ],
                             ),
                           ),
 
-                          if (!sessSnap.hasData)
-                            const SliverFillRemaining(child: _ModernLoading(text: 'Loading sessions...'))
-                          else if (sessions.isEmpty)
-                            const SliverFillRemaining(
-                              hasScrollBody: false,
-                              child: Center(
-                                child: Text(
-                                  'No sessions yet. Start one!',
-                                  style: TextStyle(color: Colors.white60),
+                          // Bottom CTA (reference-style)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                            child: SizedBox(
+                              width: double.infinity,
+                              height: 54,
+                              child: ElevatedButton(
+                                onPressed: () => _startFlow(context),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF4F46E5),
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  elevation: 0,
+                                ),
+                                child: const Text(
+                                  'START FOCUS',
+                                  style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8),
                                 ),
                               ),
-                            )
-                          else
-                            SliverList.separated(
-                              itemCount: sessions.length,
-                              separatorBuilder: (_, __) => const Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 16),
-                                child: Divider(color: Colors.white10, height: 1),
-                              ),
-                              itemBuilder: (_, i) {
-                                final d = sessions[i];
-                                final m = d.data();
-                                final id = d.id;
-
-                                final intent = (m['intent'] ?? '') as String;
-                                final status = (m['status'] ?? '') as String;
-                                final result = (m['result'] ?? '') as String;
-
-                                final actualSec = ((m['actualFocusSeconds'] ?? 0) as num).toInt();
-                                final mins = (actualSec / 60).floor();
-
-                                final subtitle = [
-                                  '$mins min',
-                                  status,
-                                  if (result.isNotEmpty) result,
-                                ].join(' • ');
-
-                                return Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                                  child: _SessionRowTile(
-                                    title: intent.isEmpty ? '(No intent)' : intent,
-                                    subtitle: subtitle,
-                                    onTap: () => Navigator.push(
-                                      context,
-                                      MaterialPageRoute(builder: (_) => SessionDetailScreen(uid: uid, sessionId: id)),
-                                    ),
-                                  ),
-                                );
-                              },
                             ),
-
-                          const SliverToBoxAdapter(child: SizedBox(height: 28)),
+                          ),
                         ],
                       );
                     },
@@ -357,29 +388,190 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
 
-      // Optional: keep FAB for quick add (nice UX)
       floatingActionButton: FloatingActionButton(
-        backgroundColor: _accent,
+        backgroundColor: const Color(0xFF4F46E5),
         onPressed: () => _startFlow(context),
-        child: const Icon(Icons.add),
+        child: const Icon(Icons.add, color: Colors.white),
       ),
     );
   }
+
+  Future<void> _startFlow(BuildContext context, {int? presetOverride}) async {
+    // If a timer is already active, don’t create a second session
+    if (_timer.active != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You already have an active timer. Resume or end it first.')),
+      );
+      return;
+    }
+
+    final pre = await Navigator.push<PreSessionResult>(
+      context,
+      MaterialPageRoute(builder: (_) => PreSessionScreen(initialPresetMinutes: presetOverride)),
+    );
+    if (pre == null) return;
+
+    final sessionService = context.read<SessionService>();
+
+    // Optimistic: create pending card immediately
+    final tempKey = DateTime.now().millisecondsSinceEpoch.toString();
+    setState(() {
+      _pending[tempKey] = _PendingSession(
+        id: tempKey,
+        intent: pre.intent,
+        status: 'creating...',
+        createdAt: DateTime.now(),
+      );
+    });
+
+    try {
+      final started = await sessionService.startSession(
+        uid: widget.uid,
+        intent: pre.intent,
+        category: pre.category,
+        presetMinutes: pre.presetMinutes,
+        breakMinutes: pre.breakMinutes,
+        autoBreak: pre.autoBreak,
+      );
+
+      // Replace pending temp with real session id (until Firestore stream shows it)
+      if (!mounted) return;
+      setState(() {
+        _pending.remove(tempKey);
+        _pending[started.sessionId] = _PendingSession(
+          id: started.sessionId,
+          intent: pre.intent,
+          status: 'running',
+          createdAt: DateTime.now(),
+        );
+      });
+
+      await _timer.startFocus(
+        uid: widget.uid,
+        sessionId: started.sessionId,
+        intent: pre.intent,
+        focusSeconds: pre.presetMinutes * 60,
+        breakSeconds: pre.breakMinutes * 60,
+        autoBreak: pre.autoBreak,
+      );
+
+      await NotificationService.instance.cancelAll();
+      await NotificationService.instance.scheduleTimerDone(
+        id: 1001,
+        fromNow: Duration(seconds: pre.presetMinutes * 60),
+        title: 'Focus complete ✅',
+        body: 'Nice. Log your feedback.',
+      );
+
+      if (!context.mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => TimerScreen(
+            uid: widget.uid,
+            sessionId: started.sessionId,
+            startedAtEpochMs: started.startedAt.toDate().millisecondsSinceEpoch,
+            plannedFocusSeconds: pre.presetMinutes * 60,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _pending.remove(tempKey));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to start session: $e')),
+      );
+    }
+  }
+
+  void _resumeActiveTimer(BuildContext context) {
+    final a = _timer.active;
+    if (a == null) return;
+
+    // If you want to show focus/break screen properly, we route based on phase.
+    if (a.phase == TimerPhase.breakTime) {
+      // You already have BreakScreen; use it if you want.
+      // For now, keep it simple and send user to TimerScreen only during focus.
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Break is active. Open your Break screen from your flow.')),
+      );
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TimerScreen(
+          uid: widget.uid,
+          sessionId: a.sessionId,
+          startedAtEpochMs: a.phaseStartEpochMs,
+          plannedFocusSeconds: a.focusSeconds,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _endActiveTimerFromHome(BuildContext context) async {
+    final a = _timer.active;
+    if (a == null) return;
+
+    final sessionService = context.read<SessionService>();
+
+    try {
+      // Cancel notifications and stop timer immediately
+      await NotificationService.instance.cancelAll();
+      await _timer.clear();
+
+      // Mark session cancelled in Firestore (best effort)
+      // We can’t know the exact original startedAt used in TimerScreen,
+      // but we can approximate with phaseStartEpochMs for now.
+      await sessionService.endSession(
+        uid: widget.uid,
+        sessionId: a.sessionId,
+        startedAt: DateTime.fromMillisecondsSinceEpoch(a.phaseStartEpochMs),
+        plannedFocusSeconds: a.focusSeconds,
+        endedNormally: false,
+        totalPausedSeconds: a.totalPausedSeconds,
+      );
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Session cancelled.')),
+      );
+      setState(() {});
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to cancel: $e')),
+      );
+    }
+  }
 }
 
-class _TopBadgesRow extends StatelessWidget {
-  const _TopBadgesRow({required this.streak, required this.score});
+/* ---------------- UI COMPONENTS ---------------- */
+
+class _HeaderRow extends StatelessWidget {
+  const _HeaderRow({required this.streak});
   final int streak;
-  final int score;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
+        const Text(
+          'FocusFlow',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 26,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 0.2,
+          ),
+        ),
+        const Spacer(),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: HomeScreenStateColors.card2,
+            color: const Color(0xFF111A2D),
             borderRadius: BorderRadius.circular(999),
             border: Border.all(color: Colors.white10),
           ),
@@ -388,28 +580,7 @@ class _TopBadgesRow extends StatelessWidget {
               const Icon(Icons.local_fire_department, color: Color(0xFFFF8A65), size: 18),
               const SizedBox(width: 6),
               Text(
-                '${streak}d',
-                style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(width: 6),
-              const Text('streak', style: TextStyle(color: Colors.white60, fontWeight: FontWeight.w600)),
-            ],
-          ),
-        ),
-        const SizedBox(width: 10),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: HomeScreenStateColors.card2,
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: Colors.white10),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.auto_graph, color: Color(0xFF7CDAFF), size: 18),
-              const SizedBox(width: 6),
-              Text(
-                'score $score',
+                '${streak}d streak',
                 style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w700),
               ),
             ],
@@ -420,123 +591,199 @@ class _TopBadgesRow extends StatelessWidget {
   }
 }
 
-/// Shared colors without making everything static on State.
-class HomeScreenStateColors {
-  static const card2 = Color(0xFF111A2D);
-}
-
-class _SmallCard extends StatelessWidget {
-  const _SmallCard({
-    required this.title,
-    required this.big,
-    required this.bottom,
+class _ActiveTimerBanner extends StatelessWidget {
+  const _ActiveTimerBanner({
+    required this.timer,
+    required this.onResume,
+    required this.onEnd,
   });
 
-  final String title;
-  final String big;
-  final Widget bottom;
+  final TimerController timer;
+  final VoidCallback onResume;
+  final VoidCallback onEnd;
+
+  String _fmt(int s) {
+    final m = (s ~/ 60).toString().padLeft(2, '0');
+    final r = (s % 60).toString().padLeft(2, '0');
+    return '$m:$r';
+  }
 
   @override
   Widget build(BuildContext context) {
+    final a = timer.active!;
+    final remaining = a.remainingSeconds();
+    final status = a.status == TimerStatus.paused ? 'Paused' : 'Running';
+
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFF0F172A),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: Colors.white10),
-        boxShadow: const [
-          BoxShadow(
-            blurRadius: 22,
-            color: Colors.black38,
-            offset: Offset(0, 10),
-          )
-        ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
         children: [
-          Text(title, style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 10),
-          Text(
-            big,
-            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+          const Icon(Icons.timer, color: Colors.white70),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  a.intent,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '$status • ${_fmt(remaining < 0 ? 0 : remaining)} left',
+                  style: const TextStyle(color: Colors.white60),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 12),
-          bottom,
+          const SizedBox(width: 10),
+          TextButton(
+            onPressed: onEnd,
+            child: const Text('End', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(width: 6),
+          ElevatedButton(
+            onPressed: onResume,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF4F46E5),
+              foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text('Resume', style: TextStyle(fontWeight: FontWeight.w900)),
+          ),
         ],
       ),
     );
   }
 }
 
-class _PrimaryStartButton extends StatelessWidget {
-  const _PrimaryStartButton({required this.label, required this.onTap});
-  final String label;
+class _BigProgressCard extends StatelessWidget {
+  const _BigProgressCard({
+    required this.totalMin,
+    required this.goalMinutes,
+    required this.progress,
+  });
+
+  final int totalMin;
+  final int goalMinutes;
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: Colors.white10),
+        boxShadow: const [
+          BoxShadow(
+            blurRadius: 24,
+            spreadRadius: 0,
+            color: Colors.black45,
+            offset: Offset(0, 10),
+          )
+        ],
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 110,
+            height: 110,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(
+                  width: 110,
+                  height: 110,
+                  child: CircularProgressIndicator(
+                    value: progress,
+                    strokeWidth: 10,
+                    backgroundColor: Colors.white10,
+                    color: const Color(0xFF4F46E5),
+                  ),
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '$totalMin',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const Text('minutes today', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Daily goal', style: TextStyle(color: Colors.white60)),
+                const SizedBox(height: 6),
+                Text(
+                  '$goalMinutes min',
+                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  '${((1.0 - progress) * 100).round()}% left',
+                  style: const TextStyle(color: Colors.white54),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QuickStartChip extends StatelessWidget {
+  const _QuickStartChip({
+    required this.labelTop,
+    required this.labelBottom,
+    required this.onTap,
+  });
+
+  final String labelTop;
+  final String labelBottom;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(22),
+      borderRadius: BorderRadius.circular(18),
       child: Container(
-        height: 56,
-        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
           color: const Color(0xFF0F172A),
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(color: Colors.white10),
-          boxShadow: const [
-            BoxShadow(
-              blurRadius: 18,
-              color: Colors.black45,
-              offset: Offset(0, 10),
-            )
+        ),
+        child: Column(
+          children: [
+            Text(labelTop, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900)),
+            const SizedBox(height: 4),
+            Text(labelBottom, style: const TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w700)),
           ],
         ),
-        child: const Text(
-          'Start Focus',
-          style: TextStyle(
-            color: Color(0xFFB9B6FF),
-            fontSize: 18,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0.2,
-          ),
-        ),
       ),
-    );
-  }
-}
-
-class _SessionRowTile extends StatelessWidget {
-  const _SessionRowTile({
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 0, vertical: 2),
-      title: Text(
-        title,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-      ),
-      subtitle: Text(
-        subtitle,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(color: Colors.white60, fontWeight: FontWeight.w600),
-      ),
-      trailing: const Icon(Icons.chevron_right, color: Colors.white38),
-      onTap: onTap,
     );
   }
 }
@@ -553,11 +800,7 @@ class _ModernLoading extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(
-              width: 34,
-              height: 34,
-              child: CircularProgressIndicator(strokeWidth: 3),
-            ),
+            const SizedBox(width: 34, height: 34, child: CircularProgressIndicator(strokeWidth: 3)),
             const SizedBox(height: 12),
             Text(text, style: const TextStyle(color: Colors.white60)),
           ],
@@ -605,6 +848,67 @@ class _ModernError extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/* ---------------- Pending session model/card ---------------- */
+
+class _PendingSession {
+  final String id;
+  final String intent;
+  final String status;
+  final DateTime createdAt;
+
+  _PendingSession({
+    required this.id,
+    required this.intent,
+    required this.status,
+    required this.createdAt,
+  });
+}
+
+class _PendingSessionCard extends StatelessWidget {
+  const _PendingSessionCard({required this.item});
+  final _PendingSession item;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF4F46E5)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.intent,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  item.status,
+                  style: const TextStyle(color: Colors.white60),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
