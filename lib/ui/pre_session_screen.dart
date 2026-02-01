@@ -25,6 +25,13 @@ class PreSessionScreen extends StatefulWidget {
 }
 
 class _PreSessionScreenState extends State<PreSessionScreen> {
+  // Theme-ish constants (same style as your updated screens)
+  static const _bgTop = Color(0xFF0B1220);
+  static const _bgBottom = Color(0xFF070B14);
+  static const _card = Color(0xFF0F172A);
+  static const _selectedCard = Color(0xFF1E1B4B);
+  static const _accent = Color(0xFF4F46E5);
+
   final intentCtrl = TextEditingController();
 
   int preset = 50;
@@ -32,13 +39,16 @@ class _PreSessionScreenState extends State<PreSessionScreen> {
   bool autoBreak = true;
   String category = 'study';
 
-  // Optional “intensity” like the reference UI (not used in DB yet)
+  // Optional “intensity” (UI-only)
   String intensity = 'medium'; // easy|medium|hard
 
   @override
   void initState() {
     super.initState();
     preset = widget.initialPresetMinutes ?? 50;
+    // optional: if user arrives via quick-start, auto align break defaults
+    if (preset == 25) breakMin = 5;
+    if (preset == 90) breakMin = 15;
   }
 
   @override
@@ -68,24 +78,28 @@ class _PreSessionScreenState extends State<PreSessionScreen> {
     );
   }
 
+  bool get _isPomodoro => preset == 25 && breakMin == 5;
+  bool get _isShort => preset == 50 && breakMin == 10;
+  bool get _isLong => preset == 90 && breakMin == 15;
+  bool get _isCustom => !_isPomodoro && !_isShort && !_isLong;
+
   @override
   Widget build(BuildContext context) {
     final safeBottom = MediaQuery.of(context).padding.bottom;
 
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
-        title: const Text('Go Live'),
-        backgroundColor: const Color(0xFF0B1220),
+        title: const Text('Go Live', style: TextStyle(fontWeight: FontWeight.w800)),
+        backgroundColor: _bgTop,
+        elevation: 0,
       ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFF0B1220),
-              Color(0xFF070B14),
-            ],
+            colors: [_bgTop, _bgBottom],
           ),
         ),
         child: SafeArea(
@@ -108,9 +122,9 @@ class _PreSessionScreenState extends State<PreSessionScreen> {
                 _GlassCard(
                   child: TextField(
                     controller: intentCtrl,
-                    style: const TextStyle(color: Colors.white),
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
                     decoration: const InputDecoration(
-                      hintText: 'e.g., Finish the physics problems',
+                      hintText: 'e.g., Crush the physics problems',
                       hintStyle: TextStyle(color: Colors.white38),
                       border: InputBorder.none,
                     ),
@@ -122,111 +136,115 @@ class _PreSessionScreenState extends State<PreSessionScreen> {
                 const SizedBox(height: 18),
 
                 Row(
-                  children: [
-                    Expanded(
-                      child: _SectionTitle('TIMER'),
-                    ),
-                    Expanded(
-                      child: _SectionTitle('CATEGORY'),
-                    ),
+                  children: const [
+                    Expanded(child: _SectionTitle('TIMER')),
+                    SizedBox(width: 12),
+                    Expanded(child: _SectionTitle('CATEGORY')),
                   ],
                 ),
                 const SizedBox(height: 10),
 
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        children: [
-                          _SelectTile(
-                            title: 'POMODORO',
-                            subtitle: '25m focus • 5m break',
-                            selected: preset == 25 && breakMin == 5,
-                            onTap: () => setState(() {
-                              preset = 25;
-                              breakMin = 5;
-                            }),
+                Expanded(
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // LEFT: TIMER
+                        Expanded(
+                          child: Column(
+                            children: [
+                              _SelectTile(
+                                title: 'POMODORO',
+                                subtitle: '25m focus • 5m break',
+                                selected: _isPomodoro,
+                                onTap: () => setState(() {
+                                  preset = 25;
+                                  breakMin = 5;
+                                }),
+                              ),
+                              const SizedBox(height: 10),
+                              _SelectTile(
+                                title: 'SHORT',
+                                subtitle: '50m focus • 10m break',
+                                selected: _isShort,
+                                onTap: () => setState(() {
+                                  preset = 50;
+                                  breakMin = 10;
+                                }),
+                              ),
+                              const SizedBox(height: 10),
+                              _SelectTile(
+                                title: 'LONG',
+                                subtitle: '90m focus • 15m break',
+                                selected: _isLong,
+                                onTap: () => setState(() {
+                                  preset = 90;
+                                  breakMin = 15;
+                                }),
+                              ),
+                              const SizedBox(height: 10),
+                              _SelectTile(
+                                title: 'CUSTOM',
+                                subtitle: _isCustom ? '$preset m focus • $breakMin m break' : 'Choose focus & break',
+                                selected: _isCustom,
+                                onTap: _showCustomPicker,
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 10),
-                          _SelectTile(
-                            title: 'SHORT',
-                            subtitle: '50m focus • 10m break',
-                            selected: preset == 50 && breakMin == 10,
-                            onTap: () => setState(() {
-                              preset = 50;
-                              breakMin = 10;
-                            }),
+                        ),
+
+                        const SizedBox(width: 12),
+
+                        // RIGHT: CATEGORY
+                        Expanded(
+                          child: Column(
+                            children: [
+                              _SelectTile(
+                                title: 'Work',
+                                subtitle: 'Deep work',
+                                selected: category == 'work',
+                                onTap: () => setState(() => category = 'work'),
+                              ),
+                              const SizedBox(height: 10),
+                              _SelectTile(
+                                title: 'Study',
+                                subtitle: 'Learning mode',
+                                selected: category == 'study',
+                                onTap: () => setState(() => category = 'study'),
+                              ),
+                              const SizedBox(height: 10),
+                              _SelectTile(
+                                title: 'Coding',
+                                subtitle: 'Build & ship',
+                                selected: category == 'coding',
+                                onTap: () => setState(() => category = 'coding'),
+                              ),
+                              const SizedBox(height: 10),
+                              _SelectTile(
+                                title: 'Reading',
+                                subtitle: 'Focus reading',
+                                selected: category == 'reading',
+                                onTap: () => setState(() => category = 'reading'),
+                              ),
+                              const SizedBox(height: 10),
+                              _SelectTile(
+                                title: 'Other',
+                                subtitle: 'Anything',
+                                selected: category == 'other',
+                                onTap: () => setState(() => category = 'other'),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 10),
-                          _SelectTile(
-                            title: 'LONG',
-                            subtitle: '90m focus • 15m break',
-                            selected: preset == 90 && breakMin == 15,
-                            onTap: () => setState(() {
-                              preset = 90;
-                              breakMin = 15;
-                            }),
-                          ),
-                          const SizedBox(height: 10),
-                          _SelectTile(
-                            title: 'CUSTOM',
-                            subtitle: 'Choose focus & break',
-                            selected: !(preset == 25 && breakMin == 5) &&
-                                !(preset == 50 && breakMin == 10) &&
-                                !(preset == 90 && breakMin == 15),
-                            onTap: () async {
-                              await _showCustomPicker();
-                            },
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        children: [
-                          _SelectTile(
-                            title: 'Work',
-                            subtitle: 'Deep work',
-                            selected: category == 'work',
-                            onTap: () => setState(() => category = 'work'),
-                          ),
-                          const SizedBox(height: 10),
-                          _SelectTile(
-                            title: 'Study',
-                            subtitle: 'Learning mode',
-                            selected: category == 'study',
-                            onTap: () => setState(() => category = 'study'),
-                          ),
-                          const SizedBox(height: 10),
-                          _SelectTile(
-                            title: 'Coding',
-                            subtitle: 'Build & ship',
-                            selected: category == 'coding',
-                            onTap: () => setState(() => category = 'coding'),
-                          ),
-                          const SizedBox(height: 10),
-                          _SelectTile(
-                            title: 'Reading',
-                            subtitle: 'Focus reading',
-                            selected: category == 'reading',
-                            onTap: () => setState(() => category = 'reading'),
-                          ),
-                          const SizedBox(height: 10),
-                          _SelectTile(
-                            title: 'Other',
-                            subtitle: 'Anything',
-                            selected: category == 'other',
-                            onTap: () => setState(() => category = 'other'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
 
                 const SizedBox(height: 14),
 
+                // Auto break panel (reference-like)
                 _GlassCard(
                   child: Row(
                     children: [
@@ -237,11 +255,11 @@ class _PreSessionScreenState extends State<PreSessionScreen> {
                           onChanged: (v) => setState(() => autoBreak = v),
                           title: const Text(
                             'Auto break after focus',
-                            style: TextStyle(color: Colors.white),
+                            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
                           ),
                           subtitle: Text(
                             'Break: $breakMin min',
-                            style: const TextStyle(color: Colors.white60),
+                            style: const TextStyle(color: Colors.white60, fontWeight: FontWeight.w600),
                           ),
                         ),
                       ),
@@ -250,6 +268,7 @@ class _PreSessionScreenState extends State<PreSessionScreen> {
                 ),
 
                 const SizedBox(height: 16),
+
                 const Text(
                   'INTENSITY',
                   style: TextStyle(
@@ -260,6 +279,7 @@ class _PreSessionScreenState extends State<PreSessionScreen> {
                   ),
                 ),
                 const SizedBox(height: 10),
+
                 Row(
                   children: [
                     Expanded(
@@ -288,7 +308,7 @@ class _PreSessionScreenState extends State<PreSessionScreen> {
                   ],
                 ),
 
-                const Spacer(),
+                const SizedBox(height: 14),
 
                 SizedBox(
                   width: double.infinity,
@@ -296,11 +316,9 @@ class _PreSessionScreenState extends State<PreSessionScreen> {
                   child: ElevatedButton(
                     onPressed: _submit,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF4F46E5),
+                      backgroundColor: _accent,
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                       elevation: 0,
                     ),
                     child: Text(
@@ -323,81 +341,92 @@ class _PreSessionScreenState extends State<PreSessionScreen> {
 
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF0B1220),
+      backgroundColor: _bgTop,
+      isScrollControlled: false,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
-      builder: (_) {
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('Custom Timer', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w800)),
-              const SizedBox(height: 12),
-              Row(
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: _GlassCard(
-                      child: DropdownButton<int>(
-                        value: tmpPreset,
-                        dropdownColor: const Color(0xFF0F172A),
-                        iconEnabledColor: Colors.white70,
-                        underline: const SizedBox.shrink(),
-                        isExpanded: true,
-                        items: const [
-                          DropdownMenuItem(value: 15, child: Text('15 min', style: TextStyle(color: Colors.white))),
-                          DropdownMenuItem(value: 25, child: Text('25 min', style: TextStyle(color: Colors.white))),
-                          DropdownMenuItem(value: 50, child: Text('50 min', style: TextStyle(color: Colors.white))),
-                          DropdownMenuItem(value: 90, child: Text('90 min', style: TextStyle(color: Colors.white))),
-                        ],
-                        onChanged: (v) => setState(() => tmpPreset = v ?? 50),
-                      ),
-                    ),
+                  const Text(
+                    'Custom Timer',
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w900),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: _GlassCard(
-                      child: DropdownButton<int>(
-                        value: tmpBreak,
-                        dropdownColor: const Color(0xFF0F172A),
-                        iconEnabledColor: Colors.white70,
-                        underline: const SizedBox.shrink(),
-                        isExpanded: true,
-                        items: const [
-                          DropdownMenuItem(value: 0, child: Text('0 min', style: TextStyle(color: Colors.white))),
-                          DropdownMenuItem(value: 5, child: Text('5 min', style: TextStyle(color: Colors.white))),
-                          DropdownMenuItem(value: 10, child: Text('10 min', style: TextStyle(color: Colors.white))),
-                          DropdownMenuItem(value: 15, child: Text('15 min', style: TextStyle(color: Colors.white))),
-                        ],
-                        onChanged: (v) => setState(() => tmpBreak = v ?? 10),
+                  const SizedBox(height: 12),
+
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _GlassCard(
+                          child: DropdownButton<int>(
+                            value: tmpPreset,
+                            dropdownColor: _card,
+                            iconEnabledColor: Colors.white70,
+                            underline: const SizedBox.shrink(),
+                            isExpanded: true,
+                            items: const [
+                              DropdownMenuItem(value: 15, child: Text('15 min', style: TextStyle(color: Colors.white))),
+                              DropdownMenuItem(value: 25, child: Text('25 min', style: TextStyle(color: Colors.white))),
+                              DropdownMenuItem(value: 50, child: Text('50 min', style: TextStyle(color: Colors.white))),
+                              DropdownMenuItem(value: 90, child: Text('90 min', style: TextStyle(color: Colors.white))),
+                            ],
+                            onChanged: (v) => setSheetState(() => tmpPreset = v ?? 50),
+                          ),
+                        ),
                       ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _GlassCard(
+                          child: DropdownButton<int>(
+                            value: tmpBreak,
+                            dropdownColor: _card,
+                            iconEnabledColor: Colors.white70,
+                            underline: const SizedBox.shrink(),
+                            isExpanded: true,
+                            items: const [
+                              DropdownMenuItem(value: 0, child: Text('0 min', style: TextStyle(color: Colors.white))),
+                              DropdownMenuItem(value: 5, child: Text('5 min', style: TextStyle(color: Colors.white))),
+                              DropdownMenuItem(value: 10, child: Text('10 min', style: TextStyle(color: Colors.white))),
+                              DropdownMenuItem(value: 15, child: Text('15 min', style: TextStyle(color: Colors.white))),
+                            ],
+                            onChanged: (v) => setSheetState(() => tmpBreak = v ?? 10),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 14),
+
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        setState(() {
+                          preset = tmpPreset;
+                          breakMin = tmpBreak;
+                        });
+                        Navigator.pop(sheetContext);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _accent,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        elevation: 0,
+                      ),
+                      child: const Text('Apply', style: TextStyle(fontWeight: FontWeight.w900)),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  onPressed: () {
-                    setState(() {
-                      preset = tmpPreset;
-                      breakMin = tmpBreak;
-                    });
-                    Navigator.pop(context);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF4F46E5),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                    elevation: 0,
-                  ),
-                  child: const Text('Apply', style: TextStyle(fontWeight: FontWeight.w800)),
-                ),
-              ),
-            ],
-          ),
+            );
+          },
         );
       },
     );
@@ -435,11 +464,7 @@ class _GlassCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.white10),
         boxShadow: const [
-          BoxShadow(
-            color: Colors.black54,
-            blurRadius: 18,
-            offset: Offset(0, 10),
-          ),
+          BoxShadow(color: Colors.black54, blurRadius: 18, offset: Offset(0, 10)),
         ],
       ),
       child: child,
@@ -460,10 +485,14 @@ class _SelectTile extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  static const _card = Color(0xFF0F172A);
+  static const _selectedCard = Color(0xFF1E1B4B);
+  static const _accent = Color(0xFF4F46E5);
+
   @override
   Widget build(BuildContext context) {
-    final bg = selected ? const Color(0xFF1E1B4B) : const Color(0xFF0F172A);
-    final border = selected ? const Color(0xFF4F46E5) : Colors.white10;
+    final bg = selected ? _selectedCard : _card;
+    final border = selected ? _accent : Colors.white10;
 
     return InkWell(
       onTap: onTap,
@@ -479,9 +508,9 @@ class _SelectTile extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800)),
+            Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900)),
             const SizedBox(height: 4),
-            Text(subtitle, style: const TextStyle(color: Colors.white60, fontSize: 12)),
+            Text(subtitle, style: const TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.w600)),
           ],
         ),
       ),
@@ -512,7 +541,7 @@ class _ChipButton extends StatelessWidget {
             label,
             style: TextStyle(
               color: selected ? const Color(0xFF0B1220) : Colors.white70,
-              fontWeight: FontWeight.w800,
+              fontWeight: FontWeight.w900,
             ),
           ),
         ),
