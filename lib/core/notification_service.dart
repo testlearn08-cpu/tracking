@@ -20,13 +20,30 @@ class NotificationService {
     priority: Priority.high,
   );
 
+  /// Supports both flutter_timezone return types:
+  /// - String (e.g. "Asia/Kolkata")
+  /// - TimezoneInfo-like object with "identifier"
+  String _extractTzName(Object tzInfo) {
+    // If plugin returns String
+    if (tzInfo is String) return tzInfo;
+
+    // If plugin returns an object (TimezoneInfo) -> use dynamic safely
+    try {
+      final dynamic d = tzInfo;
+      final String? id = d.identifier as String?;
+      if (id != null && id.isNotEmpty) return id;
+    } catch (_) {}
+
+    // Fallback (works for most Android devices)
+    return 'Asia/Kolkata';
+  }
+
   Future<void> init() async {
     tzdata.initializeTimeZones();
 
-    // flutter_timezone can return either a String or TimezoneInfo depending on version.
-    // Your current usage expects an object with .identifier — keep it safe:
-    final tzInfo = await FlutterTimezone.getLocalTimezone();
-    final String tzName = (tzInfo is String) ? tzInfo : tzInfo.identifier;
+    // flutter_timezone versions differ; treat result as Object
+    final Object tzInfo = await FlutterTimezone.getLocalTimezone();
+    final String tzName = _extractTzName(tzInfo);
 
     tz.setLocalLocation(tz.getLocation(tzName));
 
@@ -38,11 +55,10 @@ class NotificationService {
     final androidPlugin =
         _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
 
-    // ✅ Android 13+ permission (safe no-op on older)
+    // ✅ Android 13+ permission
     await androidPlugin?.requestNotificationsPermission();
 
-    // ✅ Android 12+ exact alarms permission (recommended for exactAllowWhileIdle)
-    // If not granted, some devices may delay notifications.
+    // ✅ Android 12+ exact alarm permission (recommended)
     await androidPlugin?.requestExactAlarmsPermission();
   }
 
