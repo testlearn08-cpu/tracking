@@ -9,9 +9,12 @@ class NotificationService {
 
   final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
 
+  static const String _channelId = 'focusflow_timer';
+  static const String _channelName = 'FocusFlow Timer';
+
   static const AndroidNotificationDetails _androidDetails = AndroidNotificationDetails(
-    'focusflow_timer',
-    'FocusFlow Timer',
+    _channelId,
+    _channelName,
     channelDescription: 'Timer completion notifications',
     importance: Importance.max,
     priority: Priority.high,
@@ -20,10 +23,10 @@ class NotificationService {
   Future<void> init() async {
     tzdata.initializeTimeZones();
 
-    // flutter_timezone 5.x returns TimezoneInfo with an IANA "identifier"
-    // e.g. "Asia/Kolkata"
+    // flutter_timezone can return either a String or TimezoneInfo depending on version.
+    // Your current usage expects an object with .identifier — keep it safe:
     final tzInfo = await FlutterTimezone.getLocalTimezone();
-    final String tzName = tzInfo.identifier;
+    final String tzName = (tzInfo is String) ? tzInfo : tzInfo.identifier;
 
     tz.setLocalLocation(tz.getLocation(tzName));
 
@@ -32,10 +35,15 @@ class NotificationService {
 
     await _plugin.initialize(initSettings);
 
-    // Android 13+ permission (safe: no-op on older)
-    await _plugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+    final androidPlugin =
+        _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+
+    // ✅ Android 13+ permission (safe no-op on older)
+    await androidPlugin?.requestNotificationsPermission();
+
+    // ✅ Android 12+ exact alarms permission (recommended for exactAllowWhileIdle)
+    // If not granted, some devices may delay notifications.
+    await androidPlugin?.requestExactAlarmsPermission();
   }
 
   Future<void> cancelAll() => _plugin.cancelAll();

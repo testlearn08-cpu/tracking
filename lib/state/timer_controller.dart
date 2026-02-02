@@ -66,10 +66,14 @@ class ActiveTimerModel {
       );
 
   int remainingSeconds() {
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final nowMs = (status == TimerStatus.paused && pauseStartedEpochMs != null)
+        ? pauseStartedEpochMs!
+        : DateTime.now().millisecondsSinceEpoch;
+
     final elapsed = ((nowMs - phaseStartEpochMs) / 1000).floor() - totalPausedSeconds;
     return phaseDurationSeconds - elapsed;
   }
+
 }
 
 class TimerController {

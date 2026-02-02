@@ -3,12 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import 'app.dart';
+import 'core/notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // For Android it will succeed once google-services.json is added.
-  // For Web, it will fail unless you configure Firebase Web (flutterfire).
   bool firebaseReady = true;
   try {
     await Firebase.initializeApp();
@@ -17,6 +16,16 @@ Future<void> main() async {
     if (kDebugMode) {
       // ignore: avoid_print
       print('Firebase init failed (web preview): $e');
+    }
+  }
+
+  // ✅ Initialize notifications (Android 13 permission request happens here)
+  try {
+    await NotificationService.instance.init();
+  } catch (e) {
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print('Notification init failed: $e');
     }
   }
 

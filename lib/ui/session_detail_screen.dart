@@ -295,7 +295,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                           sessionId: widget.sessionId,
                           startedAt: DateTime.fromMillisecondsSinceEpoch(startedAtEpochMs),
                           plannedFocusSeconds: plannedFocusSeconds,
-                          endedNormally: false,
+                          endedNormally: false,// change to true if want to include the session closed directly
                           totalPausedSeconds: nowA.totalPausedSeconds,
                         );
 

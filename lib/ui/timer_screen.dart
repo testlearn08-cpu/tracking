@@ -25,11 +25,27 @@ class TimerScreen extends StatefulWidget {
 }
 
 class _TimerScreenState extends State<TimerScreen> {
-  // Local paused accumulator (we keep it aligned with ActiveTimerModel.totalPausedSeconds)
   int pausedSeconds = 0;
   DateTime? pauseStartedAt;
 
   bool notifyEnabled = true;
+
+  @override
+  void initState() {
+    super.initState();
+
+    // ✅ Ensure a notification is scheduled for the current phase when screen opens.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final timer = context.read<TimerController>();
+      final a = timer.active;
+      if (a == null) return;
+
+      // Schedule based on remaining time for current phase
+      final remaining = a.remainingSeconds();
+      await _rescheduleNotificationForPhase(a: a, remaining: remaining);
+    });
+  }
 
   String _fmt(int s) {
     final x = s < 0 ? 0 : s;
@@ -39,10 +55,8 @@ class _TimerScreenState extends State<TimerScreen> {
   }
 
   void _syncPausedFromModel(ActiveTimerModel a) {
-    // Align local pausedSeconds with model’s persisted pause seconds.
     if (pausedSeconds < a.totalPausedSeconds) pausedSeconds = a.totalPausedSeconds;
 
-    // Reconstruct pauseStartedAt if model is paused.
     if (a.status == TimerStatus.paused && a.pauseStartedEpochMs != null) {
       pauseStartedAt = DateTime.fromMillisecondsSinceEpoch(a.pauseStartedEpochMs!);
     }
@@ -57,6 +71,7 @@ class _TimerScreenState extends State<TimerScreen> {
   }) async {
     if (!notifyEnabled) return;
 
+    // Cancel previous scheduled notifications to avoid duplicates
     await NotificationService.instance.cancelAll();
 
     final id = a.phase == TimerPhase.focusing ? 1001 : 1002;
@@ -117,14 +132,12 @@ class _TimerScreenState extends State<TimerScreen> {
   }
 
   /// Focus finished naturally.
-  /// If autoBreak && breakSeconds > 0 => switch to break.
-  /// else => stop and go feedback.
   Future<void> _finishFocus({
     required SessionService sessionService,
     required TimerController timer,
     required ActiveTimerModel a,
   }) async {
-    // Persist end for focus completion (endedNormally: true)
+    // Mark completed
     await sessionService.endSession(
       uid: widget.uid,
       sessionId: widget.sessionId,
@@ -134,9 +147,10 @@ class _TimerScreenState extends State<TimerScreen> {
       totalPausedSeconds: pausedSeconds,
     );
 
-    // If no break desired => stop immediately (your requirement)
+    // If no break => stop immediately and go feedback
     if (!(a.autoBreak && a.breakSeconds > 0)) {
-      await NotificationService.instance.cancelAll();
+      // ✅ DO NOT cancel notifications here.
+      // The scheduled "Focus complete" notification should fire now.
       await timer.clear();
       if (!mounted) return;
 
@@ -149,19 +163,15 @@ class _TimerScreenState extends State<TimerScreen> {
       return;
     }
 
-    // Otherwise start break phase
+    // Start break phase
     await timer.switchToBreak();
 
+    // Schedule break completion
     final remainingBreak = timer.active?.remainingSeconds() ?? a.breakSeconds;
-    if (notifyEnabled) {
-      await NotificationService.instance.cancelAll();
-      await NotificationService.instance.scheduleTimerDone(
-        id: 1002,
-        fromNow: Duration(seconds: remainingBreak < 0 ? 0 : remainingBreak),
-        title: 'Break complete ⏳',
-        body: 'Ready for your next session?',
-      );
-    }
+    await _rescheduleNotificationForPhase(
+      a: timer.active!,
+      remaining: remainingBreak,
+    );
 
     if (!mounted) return;
     setState(() {});
@@ -171,7 +181,8 @@ class _TimerScreenState extends State<TimerScreen> {
   Future<void> _finishBreak({
     required TimerController timer,
   }) async {
-    await NotificationService.instance.cancelAll();
+    // ✅ DO NOT cancel notifications here.
+    // The scheduled "Break complete" notification should fire now.
     await timer.clear();
     if (!mounted) return;
 
@@ -183,7 +194,7 @@ class _TimerScreenState extends State<TimerScreen> {
     );
   }
 
-  /// End now => stop and go feedback (not normal end).
+  /// End now => stop and go feedback (manual stop).
   Future<void> _endNow({
     required SessionService sessionService,
     required TimerController timer,
@@ -191,7 +202,6 @@ class _TimerScreenState extends State<TimerScreen> {
     final a = timer.active;
     if (a == null) return;
 
-    // If currently paused, count it before ending
     if (a.status == TimerStatus.paused) {
       _onResumed();
     }
@@ -205,6 +215,7 @@ class _TimerScreenState extends State<TimerScreen> {
       totalPausedSeconds: pausedSeconds,
     );
 
+    // ✅ Manual stop should cancel scheduled notification
     await NotificationService.instance.cancelAll();
     await timer.clear();
 
@@ -217,7 +228,7 @@ class _TimerScreenState extends State<TimerScreen> {
     );
   }
 
-  /// Cancel session (important: return home, no feedback screen)
+  /// Cancel session (return home, no feedback)
   Future<void> _cancelSession({
     required SessionService sessionService,
     required TimerController timer,
@@ -225,12 +236,10 @@ class _TimerScreenState extends State<TimerScreen> {
     final a = timer.active;
     if (a == null) return;
 
-    // If paused, count it
     if (a.status == TimerStatus.paused) {
       _onResumed();
     }
 
-    // Mark as ended (not normal). We reuse endSession because that’s what you have.
     await sessionService.endSession(
       uid: widget.uid,
       sessionId: widget.sessionId,
@@ -240,6 +249,7 @@ class _TimerScreenState extends State<TimerScreen> {
       totalPausedSeconds: pausedSeconds,
     );
 
+    // ✅ Cancel should cancel scheduled notifications
     await NotificationService.instance.cancelAll();
     await timer.clear();
 
@@ -263,7 +273,6 @@ class _TimerScreenState extends State<TimerScreen> {
       return;
     }
 
-    // Re-schedule based on current remaining
     await _rescheduleNotificationForPhase(a: a, remaining: remaining);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -283,7 +292,6 @@ class _TimerScreenState extends State<TimerScreen> {
         backgroundColor: const Color(0xFF0B1220),
         elevation: 0,
         actions: [
-          // Notification bell
           IconButton(
             tooltip: notifyEnabled ? 'Notifications on' : 'Notifications off',
             icon: Icon(
@@ -296,8 +304,6 @@ class _TimerScreenState extends State<TimerScreen> {
               _toggleNotifications(timer: timer, a: a, remaining: remaining);
             },
           ),
-
-          // Pause / Resume quick action
           IconButton(
             tooltip: 'Pause/Resume',
             icon: const Icon(Icons.pause_circle_outline),
@@ -308,7 +314,8 @@ class _TimerScreenState extends State<TimerScreen> {
               if (a.status == TimerStatus.running) {
                 _onPaused();
                 await timer.pause();
-                await NotificationService.instance.cancelAll(); // paused => no countdown notif
+                // paused => don’t allow scheduled countdown
+                await NotificationService.instance.cancelAll();
               } else if (a.status == TimerStatus.paused) {
                 _onResumed();
                 await timer.resume();
@@ -319,12 +326,11 @@ class _TimerScreenState extends State<TimerScreen> {
                   await _rescheduleNotificationForPhase(a: nowA, remaining: remaining);
                 }
               }
+
               if (!mounted) return;
               setState(() {});
             },
           ),
-
-          // Cancel (no feedback)
           IconButton(
             tooltip: 'Cancel session',
             icon: const Icon(Icons.close),
@@ -377,7 +383,7 @@ class _TimerScreenState extends State<TimerScreen> {
                 });
               }
 
-              // ✅ Auto-finish for break (so user doesn't get stuck)
+              // ✅ Auto-finish for break
               if (remaining <= 0 && a.status == TimerStatus.running && a.phase == TimerPhase.breakTime) {
                 WidgetsBinding.instance.addPostFrameCallback((_) async {
                   if (!mounted) return;
@@ -454,7 +460,6 @@ class _TimerScreenState extends State<TimerScreen> {
 
                     const SizedBox(height: 18),
 
-                    // Paused total
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       decoration: BoxDecoration(
