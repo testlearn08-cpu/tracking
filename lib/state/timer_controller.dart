@@ -65,15 +65,17 @@ class ActiveTimerModel {
         pauseStartedEpochMs: (j['pauseStartedEpochMs'] as num?)?.toInt(),
       );
 
+  /// ✅ FIX: If paused, freeze "now" at pause start so remaining doesn't decrease while paused.
   int remainingSeconds() {
     final nowMs = (status == TimerStatus.paused && pauseStartedEpochMs != null)
         ? pauseStartedEpochMs!
         : DateTime.now().millisecondsSinceEpoch;
 
-    final elapsed = ((nowMs - phaseStartEpochMs) / 1000).floor() - totalPausedSeconds;
+    final elapsed =
+        ((nowMs - phaseStartEpochMs) / 1000).floor() - totalPausedSeconds;
+
     return phaseDurationSeconds - elapsed;
   }
-
 }
 
 class TimerController {
@@ -146,7 +148,8 @@ class TimerController {
   Future<void> resume() async {
     if (active == null || active!.status != TimerStatus.paused) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final pausedFor = ((nowMs - (active!.pauseStartedEpochMs ?? nowMs)) / 1000).floor();
+    final pausedFor =
+        ((nowMs - (active!.pauseStartedEpochMs ?? nowMs)) / 1000).floor();
 
     active = ActiveTimerModel(
       uid: active!.uid,

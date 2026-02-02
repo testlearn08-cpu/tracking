@@ -39,9 +39,7 @@ class StatsService {
     return _clamp(minutesScore + completionScore + distractionScore, 0, 100);
   }
 
-  /// Firestore transaction:
-  /// - upserts dailyStats/{YYYY-MM-DD}
-  /// - increments streak only once when goal becomes met for the day
+  /// ✅ Apply a session to today's stats ONLY ONCE (endSession uses guard now).
   Future<void> applySessionToDailyStatsAndStreak({
     required String uid,
     required int sessionFocusSeconds,
@@ -51,8 +49,6 @@ class StatsService {
     if (sessionFocusSeconds <= 0) return;
 
     final today = localDateKolkataYmd();
-    final yesterday = yesterdayKolkataYmd();
-
     final userRef = db.collection('users').doc(uid);
     final dailyRef = userRef.collection('dailyStats').doc(today);
 
@@ -63,15 +59,11 @@ class StatsService {
       final userData = userSnap.data() as Map<String, dynamic>;
       final goalMinutes = (userData['goalMinutes'] as num?)?.toInt() ?? 120;
 
-      final currentStreak = (userData['streakCount'] as num?)?.toInt() ?? 0;
-      final lastGoalMetDate = userData['lastGoalMetDate'] as String?;
-
       final dailySnap = await tx.get(dailyRef);
       final dailyData = (dailySnap.data() as Map<String, dynamic>?) ?? {};
 
       final prevTotal = (dailyData['totalFocusSeconds'] as num?)?.toInt() ?? 0;
       final prevCount = (dailyData['sessionsCount'] as num?)?.toInt() ?? 0;
-      final prevGoalMet = (dailyData['goalMet'] as bool?) ?? false;
 
       int doneCount = (dailyData['doneCount'] as num?)?.toInt() ?? 0;
       int partialCount = (dailyData['partialCount'] as num?)?.toInt() ?? 0;
@@ -119,22 +111,142 @@ class StatsService {
         'updatedAt': FieldValue.serverTimestamp(),
       };
       if (!dailySnap.exists) dailyUpdate['createdAt'] = FieldValue.serverTimestamp();
-      tx.set(dailyRef, dailyUpdate, SetOptions(merge: true));
 
-      // Streak increments only when:
-      // - goal was NOT met earlier in day
-      // - goal becomes met now
-      // - and we haven't already counted today
-      if (!prevGoalMet && newGoalMet && lastGoalMetDate != today) {
-        final nextStreak = (lastGoalMetDate == yesterday) ? (currentStreak + 1) : 1;
-        tx.update(userRef, {
-          'streakCount': nextStreak,
-          'lastGoalMetDate': today,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      } else {
-        tx.update(userRef, {'updatedAt': FieldValue.serverTimestamp()});
-      }
+      tx.set(dailyRef, dailyUpdate, SetOptions(merge: true));
     });
+
+    // ✅ streak is recomputed safely (handles deletes/edits)
+    await recomputeStreak(uid: uid);
+  }
+
+  /// ✅ Recompute stats for a given date by scanning sessions collection.
+  Future<void> recomputeDailyStatsForDate({
+    required String uid,
+    required String ymd,
+  }) async {
+    final userRef = db.collection('users').doc(uid);
+    final dailyRef = userRef.collection('dailyStats').doc(ymd);
+
+    // Read goal from user
+    final userSnap = await userRef.get();
+    final goalMinutes = (userSnap.data()?['goalMinutes'] as num?)?.toInt() ?? 120;
+
+    // Query sessions for that date
+    final sessionsSnap = await userRef
+        .collection('sessions')
+        .where('localDate', isEqualTo: ymd)
+        .get();
+
+    int totalFocusSeconds = 0;
+    int sessionsCount = 0;
+
+    int doneCount = 0;
+    int partialCount = 0;
+    int notDoneCount = 0;
+
+    int distractionSum = 0;
+    int distractionCount = 0;
+
+    for (final doc in sessionsSnap.docs) {
+      final d = doc.data();
+      final status = (d['status'] ?? '') as String;
+
+      // Only count completed sessions
+      if (status != 'completed') continue;
+
+      final actualSec = ((d['actualFocusSeconds'] ?? 0) as num).toInt();
+      if (actualSec <= 0) continue;
+
+      totalFocusSeconds += actualSec;
+      sessionsCount += 1;
+
+      final result = (d['result'] ?? '') as String;
+      if (result == 'done') doneCount++;
+      if (result == 'partial') partialCount++;
+      if (result == 'not_done') notDoneCount++;
+
+      final dis = (d['distractionLevel'] as num?)?.toInt();
+      if (dis != null && dis >= 1 && dis <= 5) {
+        distractionSum += dis;
+        distractionCount += 1;
+      }
+    }
+
+    final goalSeconds = goalMinutes * 60;
+    final goalMet = totalFocusSeconds >= goalSeconds;
+
+    final focusScore = computeFocusScore(
+      totalFocusSeconds: totalFocusSeconds,
+      goalMinutes: goalMinutes,
+      doneCount: doneCount,
+      partialCount: partialCount,
+      notDoneCount: notDoneCount,
+      distractionSum: distractionSum,
+      distractionCount: distractionCount,
+    );
+
+    if (sessionsCount == 0 && totalFocusSeconds == 0) {
+      // If no sessions remain, delete stats doc (optional)
+      await dailyRef.delete().catchError((_) {});
+    } else {
+      await dailyRef.set({
+        'date': ymd,
+        'totalFocusSeconds': totalFocusSeconds,
+        'sessionsCount': sessionsCount,
+        'goalMet': goalMet,
+        'focusScore': focusScore,
+        'doneCount': doneCount,
+        'partialCount': partialCount,
+        'notDoneCount': notDoneCount,
+        'distractionSum': distractionSum,
+        'distractionCount': distractionCount,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+  }
+
+  /// ✅ Robust streak recompute: reads last ~60 days and counts consecutive goalMet ending today.
+  Future<void> recomputeStreak({required String uid}) async {
+    final userRef = db.collection('users').doc(uid);
+
+    // Pull last 60 days of dailyStats
+    final dailySnap = await userRef
+        .collection('dailyStats')
+        .orderBy('date', descending: true)
+        .limit(60)
+        .get();
+
+    final Map<String, bool> goalMetByDate = {};
+    for (final doc in dailySnap.docs) {
+      final d = doc.data();
+      final date = (d['date'] ?? doc.id) as String;
+      final met = (d['goalMet'] as bool?) ?? false;
+      goalMetByDate[date] = met;
+    }
+
+    // Build streak from today backwards (Kolkata)
+    String current = localDateKolkataYmd();
+    int streak = 0;
+
+    while (true) {
+      final met = goalMetByDate[current] == true;
+      if (!met) break;
+      streak += 1;
+
+      // move to previous day
+      final parts = current.split('-').map(int.parse).toList();
+      final dt = DateTime(parts[0], parts[1], parts[2]).subtract(const Duration(days: 1));
+      current =
+          '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+    }
+
+    final lastGoalMetDate = streak > 0 ? localDateKolkataYmd() : null;
+
+    await userRef.set({
+      'streakCount': streak,
+      'lastGoalMetDate': lastGoalMetDate,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
   }
 }

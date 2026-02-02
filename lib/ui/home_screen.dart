@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -32,6 +34,8 @@ class _HomeScreenState extends State<HomeScreen> {
   /// So we can refresh UI while the timer is running/paused.
   late final TimerController _timer;
 
+  StreamSubscription<int>? _tickerSub;
+
   @override
   void initState() {
     super.initState();
@@ -45,9 +49,15 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     // Rebuild home when ticker updates (so banner/button labels update)
-    _timer.remainingStream.listen((_) {
+    _tickerSub = _timer.remainingStream.listen((_) {
       if (mounted) setState(() {});
     });
+  }
+
+  @override
+  void dispose() {
+    _tickerSub?.cancel();
+    super.dispose();
   }
 
   @override
@@ -103,7 +113,6 @@ class _HomeScreenState extends State<HomeScreen> {
           )
         ],
       ),
-
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -152,9 +161,25 @@ class _HomeScreenState extends State<HomeScreen> {
                   }
 
                   final stats = statsSnap.data?.data() ?? {};
-                  final totalSec = ((stats['totalFocusSeconds'] ?? 0) as num).toInt();
+                  final baseTotalSec = ((stats['totalFocusSeconds'] ?? 0) as num).toInt();
+
+                  // ✅ Live add current running focus seconds (UI-only, not stored)
+                  int liveExtraSec = 0;
+                  final a = _timer.active;
+                  if (a != null &&
+                      a.uid == widget.uid &&
+                      a.phase == TimerPhase.focusing &&
+                      a.status == TimerStatus.running) {
+                    final rem = a.remainingSeconds();
+                    final elapsed = a.phaseDurationSeconds - rem;
+                    if (elapsed > 0) liveExtraSec = elapsed;
+                  }
+
+                  final totalSec = baseTotalSec + liveExtraSec;
                   final totalMin = (totalSec / 60).floor();
-                  final progress = (goalMinutes <= 0) ? 0.0 : (totalMin / goalMinutes).clamp(0.0, 1.0);
+
+                  final progress =
+                      (goalMinutes <= 0) ? 0.0 : (totalMin / goalMinutes).clamp(0.0, 1.0);
 
                   // Home widget update (safe to call repeatedly)
                   WidgetBridge.updateTodayMinutes(totalMin);
@@ -356,7 +381,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
 
-                          // Bottom CTA (reference-style)
+                          // Bottom CTA
                           Padding(
                             padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
                             child: SizedBox(
@@ -387,7 +412,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
-
       floatingActionButton: FloatingActionButton(
         backgroundColor: const Color(0xFF4F46E5),
         onPressed: () => _startFlow(context),
@@ -484,33 +508,58 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _resumeActiveTimer(BuildContext context) {
+  /// ✅ FIX: Resume uses Firestore session.startedAt (authoritative), not phaseStartEpochMs.
+  Future<void> _resumeActiveTimer(BuildContext context) async {
     final a = _timer.active;
     if (a == null) return;
 
-    // If you want to show focus/break screen properly, we route based on phase.
+    // If break is active, you can route to BreakScreen later.
     if (a.phase == TimerPhase.breakTime) {
-      // You already have BreakScreen; use it if you want.
-      // For now, keep it simple and send user to TimerScreen only during focus.
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Break is active. Open your Break screen from your flow.')),
+        const SnackBar(content: Text('Break is active. Open break in your timer flow.')),
       );
       return;
     }
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => TimerScreen(
-          uid: widget.uid,
-          sessionId: a.sessionId,
-          startedAtEpochMs: a.phaseStartEpochMs,
-          plannedFocusSeconds: a.focusSeconds,
+    try {
+      final ref = FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.uid)
+          .collection('sessions')
+          .doc(a.sessionId);
+
+      final snap = await ref.get();
+      final data = snap.data() ?? {};
+
+      final startedAt = (data['startedAt'] as Timestamp?)?.toDate();
+      final presetMinutes = ((data['presetMinutes'] ?? 0) as num).toInt();
+
+      final startedEpochMs =
+          (startedAt ?? DateTime.now()).millisecondsSinceEpoch;
+
+      final plannedFocusSeconds =
+          (presetMinutes > 0 ? presetMinutes * 60 : a.focusSeconds);
+
+      if (!context.mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => TimerScreen(
+            uid: widget.uid,
+            sessionId: a.sessionId,
+            startedAtEpochMs: startedEpochMs,
+            plannedFocusSeconds: plannedFocusSeconds,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to resume: $e')),
+      );
+    }
   }
 
+  /// ✅ FIX: End active timer uses Firestore startedAt for correct actualFocusSeconds.
   Future<void> _endActiveTimerFromHome(BuildContext context) async {
     final a = _timer.active;
     if (a == null) return;
@@ -518,18 +567,31 @@ class _HomeScreenState extends State<HomeScreen> {
     final sessionService = context.read<SessionService>();
 
     try {
-      // Cancel notifications and stop timer immediately
+      final ref = FirebaseFirestore.instance
+          .collection('users')
+          .doc(widget.uid)
+          .collection('sessions')
+          .doc(a.sessionId);
+
+      final snap = await ref.get();
+      final data = snap.data() ?? {};
+      final startedAt = (data['startedAt'] as Timestamp?)?.toDate() ??
+          DateTime.fromMillisecondsSinceEpoch(a.phaseStartEpochMs);
+
+      final presetMinutes = ((data['presetMinutes'] ?? 0) as num).toInt();
+      final plannedFocusSeconds =
+          presetMinutes > 0 ? presetMinutes * 60 : a.focusSeconds;
+
+      // Stop notifications/timer immediately
       await NotificationService.instance.cancelAll();
       await _timer.clear();
 
-      // Mark session cancelled in Firestore (best effort)
-      // We can’t know the exact original startedAt used in TimerScreen,
-      // but we can approximate with phaseStartEpochMs for now.
+      // Mark cancelled in Firestore using correct startedAt
       await sessionService.endSession(
         uid: widget.uid,
         sessionId: a.sessionId,
-        startedAt: DateTime.fromMillisecondsSinceEpoch(a.phaseStartEpochMs),
-        plannedFocusSeconds: a.focusSeconds,
+        startedAt: startedAt,
+        plannedFocusSeconds: plannedFocusSeconds,
         endedNormally: false,
         totalPausedSeconds: a.totalPausedSeconds,
       );
@@ -603,8 +665,9 @@ class _ActiveTimerBanner extends StatelessWidget {
   final VoidCallback onEnd;
 
   String _fmt(int s) {
-    final m = (s ~/ 60).toString().padLeft(2, '0');
-    final r = (s % 60).toString().padLeft(2, '0');
+    final x = s < 0 ? 0 : s;
+    final m = (x ~/ 60).toString().padLeft(2, '0');
+    final r = (x % 60).toString().padLeft(2, '0');
     return '$m:$r';
   }
 
@@ -637,7 +700,7 @@ class _ActiveTimerBanner extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '$status • ${_fmt(remaining < 0 ? 0 : remaining)} left',
+                  '$status • ${_fmt(remaining)} left',
                   style: const TextStyle(color: Colors.white60),
                 ),
               ],

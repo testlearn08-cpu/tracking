@@ -53,11 +53,15 @@ class SessionService {
       'localDate': localDate,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
+
+      // ✅ guard
+      'statsApplied': false,
     });
 
     return StartedSession(id, startedAt, localDate);
   }
 
+  /// ✅ endSession is now idempotent for stats.
   Future<void> endSession({
     required String uid,
     required String sessionId,
@@ -76,28 +80,50 @@ class SessionService {
     if (actual > plannedFocusSeconds) overtime = actual - plannedFocusSeconds;
 
     if (!endedNormally) {
-      // Cancelled sessions should not count overtime.
       overtime = 0;
       if (actual > plannedFocusSeconds) actual = plannedFocusSeconds;
     }
 
-    await ref.update({
-      'endedAt': Timestamp.fromDate(end),
-      'actualFocusSeconds': actual,
-      'overtimeSeconds': overtime,
-      'status': endedNormally ? 'completed' : 'cancelled',
-      'updatedAt': FieldValue.serverTimestamp(),
+    // ✅ Transaction: update session + apply stats ONLY if not applied yet.
+    bool shouldApplyStats = false;
+    String sessionLocalDate = localDateKolkataYmd();
+
+    await db.runTransaction((tx) async {
+      final snap = await tx.get(ref);
+      if (!snap.exists) throw StateError('Session not found');
+
+      final data = snap.data() as Map<String, dynamic>;
+      sessionLocalDate = (data['localDate'] as String?) ?? sessionLocalDate;
+
+      final alreadyApplied = (data['statsApplied'] as bool?) ?? false;
+
+      // Update session end fields
+      tx.update(ref, {
+        'endedAt': Timestamp.fromDate(end),
+        'actualFocusSeconds': actual,
+        'overtimeSeconds': overtime,
+        'status': endedNormally ? 'completed' : 'cancelled',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      // Only apply stats once for completed sessions with >0 focus
+      if (endedNormally && actual > 0 && !alreadyApplied) {
+        tx.update(ref, {'statsApplied': true});
+        shouldApplyStats = true;
+      }
     });
 
-    // ✅ IMPORTANT: Update dailyStats immediately when a session completes.
-    // This makes HomeScreen show minutes/score without waiting for feedback.
-    if (endedNormally && actual > 0) {
+    if (shouldApplyStats) {
       await statsService.applySessionToDailyStatsAndStreak(
         uid: uid,
         sessionFocusSeconds: actual,
-        sessionResult: null, // result added later in feedback
-        distractionLevel: null, // distraction added later in feedback
+        sessionResult: null,
+        distractionLevel: null,
       );
+    } else {
+      // If stats weren't applied (duplicate call or cancelled), keep stats consistent
+      await statsService.recomputeDailyStatsForDate(uid: uid, ymd: sessionLocalDate);
+      await statsService.recomputeStreak(uid: uid);
     }
   }
 
@@ -121,11 +147,26 @@ class SessionService {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // ✅ Optional: If you want score to reflect result/distraction,
-    // you can re-apply stats (but then you must implement "recompute day"
-    // or store per-session contribution).
-    //
-    // For now we keep it simple: minutes/streak update at endSession(),
-    // feedback just stores fields.
+    // ✅ Recompute day stats because result/distraction influences focusScore
+    final localDate = (snap.data()?['localDate'] as String?) ?? localDateKolkataYmd();
+    await statsService.recomputeDailyStatsForDate(uid: uid, ymd: localDate);
+    await statsService.recomputeStreak(uid: uid);
+  }
+
+  /// ✅ Delete a session + recompute that day's stats.
+  Future<void> deleteSession({
+    required String uid,
+    required String sessionId,
+  }) async {
+    final ref = _sessionsCol(uid).doc(sessionId);
+    final snap = await ref.get();
+    if (!snap.exists) return;
+
+    final localDate = (snap.data()?['localDate'] as String?) ?? localDateKolkataYmd();
+
+    await ref.delete();
+
+    await statsService.recomputeDailyStatsForDate(uid: uid, ymd: localDate);
+    await statsService.recomputeStreak(uid: uid);
   }
 }

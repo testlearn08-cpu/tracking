@@ -33,13 +33,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
     return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}  $hh:$mm';
   }
 
-  String _fmt(int s) {
-    final x = s < 0 ? 0 : s;
-    final m = (x ~/ 60).toString().padLeft(2, '0');
-    final r = (x % 60).toString().padLeft(2, '0');
-    return '$m:$r';
-  }
-
   Future<bool> _confirm({
     required String title,
     required String message,
@@ -109,6 +102,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         .doc(widget.sessionId);
 
     final timer = context.read<TimerController>();
+    final service = context.read<SessionService>();
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -116,6 +110,38 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: const Text('Session Details', style: TextStyle(fontWeight: FontWeight.w900)),
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (v) async {
+              if (v == 'delete') {
+                final a = timer.active;
+                final isLive = a != null && a.sessionId == widget.sessionId && a.uid == widget.uid;
+
+                if (isLive) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('This session is running. Cancel it first.')),
+                  );
+                  return;
+                }
+
+                final ok = await _confirm(
+                  title: 'Delete session?',
+                  message: 'This will permanently delete this session and update your daily stats.',
+                  confirmText: 'Delete',
+                );
+                if (!ok) return;
+
+                await service.deleteSession(uid: widget.uid, sessionId: widget.sessionId);
+
+                if (!mounted) return;
+                Navigator.pop(context);
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'delete', child: Text('Delete')),
+            ],
+          ),
+        ],
       ),
       extendBodyBehindAppBar: true,
       body: Container(
@@ -127,8 +153,8 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
           ),
         ),
         child: SafeArea(
-          child: FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-            future: ref.get(),
+          child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+            stream: ref.snapshots(),
             builder: (context, snap) {
               if (snap.hasError) {
                 return _ModernError(
@@ -149,7 +175,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
               }
 
               final d = doc.data() ?? {};
-
               final intent = (d['intent'] ?? '') as String;
               final localDate = (d['localDate'] ?? '') as String;
               final status = (d['status'] ?? '') as String;
@@ -179,7 +204,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
               return ListView(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
                 children: [
-                  // Header card
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -202,7 +226,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                     ),
                   ),
 
-                  // ✅ LIVE TIMER CARD (only if active)
                   if (isLive) ...[
                     const SizedBox(height: 12),
                     _LiveTimerCard(
@@ -256,7 +279,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                         );
                         if (!ok) return;
 
-                        final service = context.read<SessionService>();
                         final nowA = timer.active;
                         if (nowA == null) return;
 
@@ -286,7 +308,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                         );
                         if (!ok) return;
 
-                        final service = context.read<SessionService>();
                         final nowA = timer.active;
                         if (nowA == null) return;
 
@@ -295,7 +316,7 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                           sessionId: widget.sessionId,
                           startedAt: DateTime.fromMillisecondsSinceEpoch(startedAtEpochMs),
                           plannedFocusSeconds: plannedFocusSeconds,
-                          endedNormally: false,// change to true if want to include the session closed directly
+                          endedNormally: false,
                           totalPausedSeconds: nowA.totalPausedSeconds,
                         );
 
@@ -341,14 +362,6 @@ class _SessionDetailScreenState extends State<SessionDetailScreen> {
                       ),
                     ],
                   ),
-
-                  const SizedBox(height: 6),
-                  if (!isLive)
-                    const Text(
-                      'Tip: Open this session while it is running to see the live timer here.',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white38, fontSize: 12),
-                    ),
                 ],
               );
             },
